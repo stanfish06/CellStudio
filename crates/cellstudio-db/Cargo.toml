@@ -1,0 +1,15 @@
+[package]
+name = "cellstudio-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cellstudio-core = { workspace = true }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tempfile = "3.27.0"

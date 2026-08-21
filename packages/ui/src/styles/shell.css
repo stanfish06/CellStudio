@@ -1,0 +1,262 @@
+.titlebar,
+.menubar,
+.statusbar {
+  display: flex;
+  align-items: center;
+  border-color: var(--line);
+  user-select: none;
+}
+
+.titlebar {
+  border-bottom: 1px solid var(--line);
+  padding: 0 10px;
+  background: #35373a;
+  gap: 9px;
+  -webkit-app-region: drag;
+}
+
+.titlebar button,
+.titlebar input {
+  -webkit-app-region: no-drag;
+}
+
+.mark {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #66696e;
+  border-radius: 2px;
+  display: grid;
+  place-items: center;
+  background: #292b2e;
+}
+
+.mark svg {
+  width: 12px;
+  height: 12px;
+  stroke: var(--text);
+  fill: none;
+  stroke-width: 1.7;
+}
+
+.project-title {
+  color: #f1f1f1;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+}
+
+.menubar {
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+  padding: 0 7px;
+  gap: 1px;
+}
+
+.menu-button {
+  border: 0;
+  background: transparent;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 2px;
+  color: #ededed;
+}
+
+.menu-button:hover:not(:disabled) {
+  background: #45474b;
+}
+
+.menu-spacer {
+  flex: 1;
+}
+
+.ribbon {
+  height: 48px;
+  border-bottom: 1px solid var(--line);
+  background: #34363a;
+  display: flex;
+  align-items: stretch;
+  padding: 2px 7px 0;
+  gap: 4px;
+  user-select: none;
+}
+
+.ribbon-group {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 0 7px 12px 0;
+  border-right: 1px solid var(--line);
+}
+
+.ribbon-group:last-child {
+  border-right: 0;
+}
+
+.ribbon-group-title {
+  position: absolute;
+  left: 0;
+  right: 7px;
+  bottom: 0;
+  text-align: center;
+  color: var(--faint);
+  font-size: 8px;
+  line-height: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.ribbon-tool {
+  position: relative;
+  width: 44px;
+  height: 33px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: #f4f4f4;
+  display: grid;
+  grid-template-rows: 18px 11px;
+  align-items: center;
+  justify-items: center;
+  padding: 2px;
+}
+
+.ribbon-tool:hover:not(:disabled) {
+  background: #494b50;
+  color: #fff;
+}
+
+.ribbon-tool.active {
+  background: var(--focus-bg);
+  border-color: #65acd7;
+  color: #fff;
+}
+
+.ribbon-tool svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ribbon-tool .ribbon-label {
+  font-size: 8px;
+  color: #dedede;
+  white-space: nowrap;
+}
+
+.ribbon-tool .key {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  font: 7px/1 var(--mono);
+  color: var(--faint);
+}
+
+.workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(520px, 1fr) 300px;
+}
+
+.statusbar {
+  border-top: 1px solid var(--line);
+  background: #25272a;
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 14px;
+  padding: 0 8px;
+  color: #c7c7c7;
+  font: 10px var(--mono);
+}
+
+.status-left {
+  display: flex;
+  gap: 14px;
+  min-width: 0;
+}
+
+.status-left span {
+  white-space: nowrap;
+}
+
+.status-left strong {
+  font-weight: 500;
+  color: #dbe3ea;
+}
+
+.job-status,
+.backend-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #b7c1cb;
+}
+
+.job-status .dot,
+.backend-status .dot {
+  width: 6px;
+  height: 6px;
+  box-shadow: none;
+}
+
+.shortcut-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.58);
+  display: grid;
+  place-items: center;
+}
+
+.shortcut-card {
+  width: 460px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #35373b;
+  box-shadow: 0 20px 60px #000;
+  padding: 16px;
+}
+
+.shortcut-card h2 {
+  font-size: 14px;
+  margin: 0 0 13px;
+}
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 24px;
+}
+
+.shortcut {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+}
+
+.shortcut-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+@media (max-width: 1050px) {
+  .workspace {
+    grid-template-columns: minmax(420px, 1fr) 240px;
+  }
+  .dataset-meta {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .workspace {
+    grid-template-columns: minmax(420px, 1fr);
+  }
+  .ribbon-tool {
+    width: 40px;
+  }
+}

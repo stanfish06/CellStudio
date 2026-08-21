@@ -1,0 +1,18 @@
+[tools]
+bun = "latest"
+pnpm = "latest"
+rust = "latest"
+"cargo:cargo-watch" = "latest"
+uv = "latest"
+python = "3.12"
+node = "22"
+
+[tasks.dev]
+description = "dev launch"
+run = "sh -c \"trap 'kill \\$(jobs -p) 2>/dev/null; pkill -f cellstudio-server 2>/dev/null' EXIT INT TERM; cargo watch -x 'run -p cellstudio-server' & pnpm --filter @cellstudio/desktop dev\""
+
+[tasks.test]
+run = ["cargo test --workspace", "pnpm -r --if-present test"]
+
+[tasks.build]
+run = ["cargo build --release -p cellstudio-server", "pnpm -r --if-present build"]

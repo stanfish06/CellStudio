@@ -1,0 +1,21 @@
+.claude
+openspec
+
+# local experiment data
+*.ims
+data/
+.data/
+
+# frontend prototypes
+index.html
+
+# build output
+node_modules/
+target/
+dist/
+out/
+*.tsbuildinfo
+.vite/
+
+.DS_Store
+docs/

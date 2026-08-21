@@ -1,0 +1,161 @@
+:root {
+  color-scheme: dark;
+  --bg-0: #1b1c1e;
+  --bg-1: #2b2d30;
+  --bg-2: #313337;
+  --bg-3: #3b3d42;
+  --bg-4: #474a4f;
+  --line: #17181a;
+  --line-strong: #5b5e63;
+  --text: #f2f2f2;
+  --muted: #c2c4c7;
+  --faint: #92959a;
+  --focus: #4ea3d8;
+  --focus-bg: #405a6e;
+  --selection: #ffbf69;
+  --success: #54c59a;
+  --warning: #e4a853;
+  --danger: #ed6b72;
+  --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --sans:
+    'Noto Sans', Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg-0);
+  font: 12px/1.35 var(--sans);
+  color: var(--text);
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.app {
+  height: 100%;
+  display: grid;
+  /* No in-app title row: the OS title bar carries the project name, and a frameless
+     overlay would draw the window controls on top of the menu bar. */
+  grid-template-rows: 30px 48px minmax(0, 1fr) 24px;
+  background: var(--bg-1);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 2px #153128;
+}
+
+.dot.progress {
+  background: var(--focus);
+}
+
+.dot.warn {
+  background: var(--warning);
+}
+
+.dot.down {
+  background: var(--danger);
+}
+
+.icon-button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: #ededed;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.icon-button:hover:not(:disabled),
+.icon-button.active {
+  background: #484a4f;
+  color: #fff;
+  border-color: var(--line);
+}
+
+.icon-button svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.icon-button:disabled,
+.small-button:disabled,
+.menu-button:disabled {
+  opacity: 0.42;
+}
+
+.small-button {
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #414348;
+  color: #f0f0f0;
+  padding: 0 9px;
+}
+
+.small-button:hover:not(:disabled) {
+  background: #505258;
+}
+
+.small-button.primary {
+  background: var(--focus-bg);
+  border-color: #65acd7;
+  color: #fff;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.bar-sep {
+  height: 22px;
+  border-left: 1px solid var(--line);
+  margin: 0 2px;
+}
+
+kbd {
+  font: 10px var(--mono);
+  color: #d9e3eb;
+  border: 1px solid #455260;
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 2px 5px;
+  background: #202831;
+}

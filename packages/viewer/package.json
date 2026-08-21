@@ -1,0 +1,34 @@
+{
+  "name": "@cellstudio/viewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@cellstudio/api-client": "workspace:*",
+    "@deck.gl/core": "^9.3.10",
+    "@deck.gl/geo-layers": "^9.3.10",
+    "@deck.gl/layers": "^9.3.10",
+    "@hms-dbmi/viv": "^0.22.1",
+    "@luma.gl/constants": "^9.3.6",
+    "@luma.gl/core": "^9.3.6",
+    "@luma.gl/engine": "^9.3.6",
+    "@luma.gl/shadertools": "^9.3.6",
+    "@luma.gl/webgl": "^9.3.6",
+    "deck.gl": "^9.3.10",
+    "zarrita": "^0.7.4",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
