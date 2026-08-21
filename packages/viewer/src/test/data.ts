@@ -10,7 +10,12 @@ import type {
 } from '@cellstudio/api-client'
 import type { OrthoAxis, PixelApi } from '../data/api'
 import type { NavSnapshot } from '../scenes/types'
-import { channelStateFrom, type ActiveView, type ChannelState } from '../state/nav'
+import {
+  channelStateFrom,
+  type ActiveView,
+  type ChannelState,
+  type OrbitCamera,
+} from '../state/nav'
 
 const dims = (t: number, c: number, z: number, y: number, x: number): Dims => ({ t, c, z, y, x })
 
@@ -55,6 +60,7 @@ export interface NavOverrides {
   zoom?: Partial<Record<'xy' | 'xz' | 'yz', number>>
   axisScale?: { z: number; y: number; x: number }
   channels?: ChannelState[]
+  camera?: OrbitCamera | null
   generation?: number
   trail?: number
   selection?: { cellId: number } | null
@@ -74,7 +80,7 @@ export function navSnapshot(project: ProjectInfo, o: NavOverrides = {}): NavSnap
       xz: slice('xz', Math.floor(project.dims.y / 2)),
       yz: slice('yz', Math.floor(project.dims.x / 2)),
     },
-    volume: { camera: { rotationX: 25, rotationOrbit: 25, zoom: 0, target: [0, 0, 0] } },
+    volume: { camera: o.camera ?? null },
     channels: o.channels ?? channelsFor(project),
     activeChannel: 0,
     overlays: {

@@ -1,9 +1,40 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Bbox, CellRow } from '@cellstudio/api-client'
 import { ViewerSession } from './session'
 import { GpuBudget } from '../data/gpuBudget'
+import type { NavSnapshot } from './types'
+import type { OrbitCamera } from '../state/nav'
 import { FakeApi, cell, devProject, navSnapshot } from '../test/data'
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
+
+const pose = (zoom: number): OrbitCamera => ({
+  rotationX: 30,
+  rotationOrbit: 45,
+  zoom,
+  target: [1, 2, 3],
+})
+
+const moved = (nav: NavSnapshot, zoom: number): NavSnapshot => ({
+  ...nav,
+  volume: { camera: pose(zoom) },
+})
+
+/** `FakeApi` answers `cellsWindow` immediately; this one holds the window open. */
+class HeldCellsApi extends FakeApi {
+  private pendingCells: ((rows: CellRow[]) => void)[] = []
+
+  override cellsWindow(q: { t0: number; t1: number; bbox?: Bbox }): Promise<CellRow[]> {
+    this.cellCalls.push({ t0: q.t0, t1: q.t1 })
+    return new Promise<CellRow[]>((resolve) => {
+      this.pendingCells.push(resolve)
+    })
+  }
+
+  get openCells(): number {
+    return this.pendingCells.length
+  }
+}
 
 const session = (api: FakeApi, tSettleMs = 150) =>
   new ViewerSession({
@@ -116,6 +147,50 @@ describe('ViewerSession', () => {
     s.update(navSnapshot(project, { activeView: 'xy', generation: 2 }))
     await settle()
     expect(api.cellCalls.length).toBe(calls + 1)
+    s.dispose()
+  })
+
+  it('stays silent for a camera-only update while still reporting the new zoom', async () => {
+    const api = new FakeApi()
+    const s = session(api)
+    const nav = navSnapshot(project, { activeView: '3d' })
+    s.update(nav)
+    await settle()
+    let notified = 0
+    s.onChange(() => (notified += 1))
+    s.update(moved(nav, -3))
+    // An emit here would bump SceneCanvas's tick and rebuild the volume layer every frame.
+    expect(notified).toBe(0)
+    expect(s.status.display.zoom).toBe(-3)
+    s.dispose()
+  })
+
+  it('issues no request of any kind while the camera moves', async () => {
+    const api = new HeldCellsApi()
+    api.auto = false
+    const s = session(api)
+    const nav = navSnapshot(project, { activeView: '3d' })
+    s.update(nav)
+    await settle()
+    expect(api.openVolumes).toBeGreaterThan(0)
+    expect(api.openCells).toBe(1)
+    const before = {
+      volume: api.volumeCalls.length,
+      slice: api.sliceCalls.length,
+      cells: api.cellCalls.length,
+      pixel: api.pixelCalls.length,
+      aborted: api.volumeCalls.map((c) => c.signal?.aborted ?? false),
+    }
+
+    for (let i = 1; i <= 12; i += 1) s.update(moved(nav, -i / 4))
+    await settle()
+
+    expect(api.volumeCalls).toHaveLength(before.volume)
+    expect(api.cellCalls).toHaveLength(before.cells)
+    expect(api.sliceCalls).toHaveLength(before.slice)
+    expect(api.pixelCalls).toHaveLength(before.pixel)
+    expect(api.volumeCalls.map((c) => c.signal?.aborted ?? false)).toEqual(before.aborted)
+    expect(s.status.display.zoom).toBe(-3)
     s.dispose()
   })
 

@@ -61,7 +61,9 @@ export function App({
   const project = useNav((s) => s.project)
   const tool = useNav((s) => s.tool)
   const setTool = useNav((s) => s.setTool)
+  const activeView = useNav((s) => s.activeView)
   const activeChannel = useNav((s) => s.activeChannel)
+  const resetVolumeCamera = useNav((s) => s.resetVolumeCamera)
 
   const [tab, setTab] = useState<InspectorTab>('inspect')
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -92,6 +94,10 @@ export function App({
         case 'tool':
           if (isToolEnabled(action.tool)) nav.setTool(action.tool)
           break
+        case 'resetView':
+          // Only the 3D view shows the pose the key would clear.
+          if (nav.activeView === '3d') nav.resetVolumeCamera()
+          break
         case 'shortcuts':
           setShortcutsOpen(true)
           break
@@ -109,7 +115,13 @@ export function App({
   return (
     <div className="app">
       <MenuBar onMenu={onMenu} />
-      <Ribbon tool={tool} onTool={setTool} onShortcuts={() => setShortcutsOpen((open) => !open)} />
+      <Ribbon
+        tool={tool}
+        onTool={setTool}
+        onShortcuts={() => setShortcutsOpen((open) => !open)}
+        onResetView={resetVolumeCamera}
+        resetEnabled={activeView === '3d'}
+      />
       <main className="workspace">
         <ViewPanel
           scene={scene}

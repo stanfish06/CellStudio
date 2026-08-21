@@ -4,7 +4,6 @@ import { formatUm } from './format'
 import { VIEW_LABELS } from './keymap'
 import type { SliceAxisName } from './transport'
 
-/** A chip with one emphasized value, matching the prototype's bold segments. */
 export interface Chip {
   prefix: string
   emphasis: string
@@ -21,12 +20,10 @@ export interface SliceChip {
 
 export interface HudInput {
   activeView: ActiveView
-  /** Null in the 3D view, which projects the volume instead of showing a slice. */
   slice: SliceChip | null
   t: number
   tMax: number
   level: number
-  /** deck.gl log2 zoom; 0 is one screen pixel per data pixel. */
   zoom: number
   scale: PhysicalScale | null
 }
@@ -51,7 +48,7 @@ export function orientationChip(view: ActiveView, slice: SliceChip | null): Chip
   return {
     prefix: '',
     emphasis: VIEW_LABELS[view],
-    suffix: slice ? ` · ${slice.axis.toUpperCase()} ${slice.index}/${slice.max}` : ' · MIP',
+    suffix: slice ? ` · ${slice.axis.toUpperCase()} ${slice.index}/${slice.max}` : '',
   }
 }
 

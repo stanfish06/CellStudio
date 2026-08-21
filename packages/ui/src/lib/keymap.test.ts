@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest'
-import { LARGE_STEP, SHORTCUTS, TOOL_KEYS, isToolEnabled, resolveKey } from './keymap'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  LARGE_STEP,
+  RESET_VIEW_KEY,
+  SHORTCUTS,
+  TOOL_KEYS,
+  isToolEnabled,
+  isTypingTarget,
+  resolveKey,
+} from './keymap'
 
 describe('resolveKey', () => {
   it('maps 1-4 to the four views in order', () => {
@@ -40,6 +48,20 @@ describe('resolveKey', () => {
     expect(isToolEnabled('pan')).toBe(true)
   })
 
+  it('resets the view on either case of the reset key', () => {
+    expect(RESET_VIEW_KEY).toBe('R')
+    expect(resolveKey({ key: 'r' })).toEqual({ kind: 'resetView' })
+    expect(resolveKey({ key: 'R' })).toEqual({ kind: 'resetView' })
+    expect(resolveKey({ key: 'R', shiftKey: true })).toEqual({ kind: 'resetView' })
+  })
+
+  it('leaves a modified reset key to the menus', () => {
+    expect(resolveKey({ key: 'r', metaKey: true })).toBeNull()
+    expect(resolveKey({ key: 'R', ctrlKey: true })).toBeNull()
+    expect(resolveKey({ key: 'r', altKey: true })).toBeNull()
+    expect(resolveKey({ key: 'r', ctrlKey: true, shiftKey: true })).toBeNull()
+  })
+
   it('opens the shortcuts dialog on ? and dismisses on Escape', () => {
     expect(resolveKey({ key: '?' })).toEqual({ kind: 'shortcuts' })
     expect(resolveKey({ key: 'Escape' })).toEqual({ kind: 'dismiss' })
@@ -59,6 +81,36 @@ describe('resolveKey', () => {
   })
 })
 
+class FakeElement {
+  constructor(
+    readonly tagName: string,
+    readonly isContentEditable = false,
+  ) {}
+}
+
+// No DOM in this environment; `instanceof HTMLElement` needs a stand-in.
+const target = (tagName: string, isContentEditable = false) =>
+  new FakeElement(tagName, isContentEditable) as unknown as EventTarget
+
+describe('isTypingTarget', () => {
+  beforeEach(() => vi.stubGlobal('HTMLElement', FakeElement))
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('claims the keys typed into a field, including the reset key', () => {
+    expect(resolveKey({ key: 'r' })).toEqual({ kind: 'resetView' })
+    expect(isTypingTarget(target('INPUT'))).toBe(true)
+    expect(isTypingTarget(target('TEXTAREA'))).toBe(true)
+    expect(isTypingTarget(target('SELECT'))).toBe(true)
+    expect(isTypingTarget(target('DIV', true))).toBe(true)
+  })
+
+  it('leaves the canvas and non-elements to the app', () => {
+    expect(isTypingTarget(target('CANVAS'))).toBe(false)
+    expect(isTypingTarget(target('BUTTON'))).toBe(false)
+    expect(isTypingTarget(null)).toBe(false)
+  })
+})
+
 describe('SHORTCUTS', () => {
   it('lists a binding for every tool letter plus the view, frame and slice keys', () => {
     const text = SHORTCUTS.map((s) => `${s.action} ${s.keys}`).join(' | ')
@@ -68,5 +120,20 @@ describe('SHORTCUTS', () => {
     expect(text).toContain('[ ]')
     expect(text).toContain('Shift')
     expect(text).toContain('Esc')
+  })
+
+  it('lists the reset binding with the navigation rows', () => {
+    const index = SHORTCUTS.findIndex((s) => s.action === 'Reset 3D view')
+    expect(SHORTCUTS[index]?.keys).toBe(RESET_VIEW_KEY)
+    expect(index).toBeLessThan(SHORTCUTS.findIndex((s) => s.action === 'Pointer / pan'))
+  })
+
+  it('resolves every single key it advertises', () => {
+    for (const row of SHORTCUTS) {
+      for (const key of row.keys.split(' / ')) {
+        if (key.length !== 1) continue
+        expect(resolveKey({ key }), `${row.action} (${key})`).not.toBeNull()
+      }
+    }
   })
 })

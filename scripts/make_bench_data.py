@@ -10,8 +10,8 @@
 """Generate the synthetic bench store: deep and wide OME-Zarr for budget runs.
 
 Example:
-    uv run scripts/make_bench_data.py --out data/bench.zarr
-    uv run scripts/make_bench_data.py --out data/bench.zarr --dry-run
+    uv run scripts/make_bench_data.py --out .data/bench.zarr
+    uv run scripts/make_bench_data.py --out .data/bench.zarr --dry-run
     uv run scripts/make_bench_data.py --out /vol/bench.zarr --scale 2 --max-disk-gb 40
 """
 
@@ -380,7 +380,7 @@ def verify(out: Path, projected: int) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--out", type=Path, default=Path("data/bench.zarr"), help="Output .zarr dir"
+        "--out", type=Path, default=Path(".data/bench.zarr"), help="Output .zarr dir"
     )
     parser.add_argument(
         "--max-disk-gb",

@@ -50,7 +50,7 @@ describe('hudChips', () => {
     expect(chipText(orientationChip('yz', { axis: 'x', index: 983, max: 2047 }))).toBe(
       'YZ · X 983/2047',
     )
-    expect(chipText(orientationChip('3d', null))).toBe('3D · MIP')
+    expect(chipText(orientationChip('3d', null))).toBe('3D')
   })
 
   it('tracks the pyramid level and zoom independently', () => {

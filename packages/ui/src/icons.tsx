@@ -56,6 +56,12 @@ export const TOOL_ICONS: Record<Tool, () => ReactElement> = {
   ),
 }
 
+export const ResetViewIcon = () => (
+  <svg {...box}>
+    <path d="M19 12a7 7 0 11-2.05-4.95M17 3v4h-4" />
+  </svg>
+)
+
 export const HelpIcon = () => (
   <svg {...box}>
     <circle cx="12" cy="12" r="9" />

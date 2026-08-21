@@ -31,16 +31,19 @@ export const TOOL_LABELS: Record<Tool, string> = {
   cut: 'Cut link',
 }
 
-/** Only navigation tools have shipped; the rest resolve but stay inert. */
 export const ENABLED_TOOLS: readonly Tool[] = ['pointer', 'pan']
 
 export const LARGE_STEP = 10
+
+/** Returns the 3D camera to the fit pose; case-insensitively. */
+export const RESET_VIEW_KEY = 'R'
 
 export type KeyAction =
   | { kind: 'view'; view: ActiveView }
   | { kind: 'stepT'; delta: number }
   | { kind: 'stepSlice'; delta: number }
   | { kind: 'tool'; tool: Tool }
+  | { kind: 'resetView' }
   | { kind: 'shortcuts' }
   | { kind: 'dismiss' }
 
@@ -62,7 +65,6 @@ export function isToolEnabled(tool: Tool): boolean {
 
 export function resolveKey(e: KeyLike): KeyAction | null {
   if (e.key === 'Escape') return { kind: 'dismiss' }
-  // Accelerators belong to the menus; only Shift modifies navigation keys.
   if (e.ctrlKey === true || e.metaKey === true || e.altKey === true) return null
   if (e.key === '?') return { kind: 'shortcuts' }
 
@@ -85,7 +87,9 @@ export function resolveKey(e: KeyLike): KeyAction | null {
   }
 
   if (e.key.length !== 1) return null
-  const tool = TOOL_BY_KEY.get(e.key.toUpperCase())
+  const letter = e.key.toUpperCase()
+  if (letter === RESET_VIEW_KEY) return { kind: 'resetView' }
+  const tool = TOOL_BY_KEY.get(letter)
   return tool ? { kind: 'tool', tool } : null
 }
 
@@ -106,6 +110,7 @@ export const SHORTCUTS: readonly ShortcutRow[] = [
   { action: 'Previous / next frame', keys: '← →' },
   { action: 'Previous / next slice', keys: '[ ]' },
   { action: `Large step (${LARGE_STEP}×)`, keys: 'Shift' },
+  { action: 'Reset 3D view', keys: RESET_VIEW_KEY },
   { action: 'Pointer / pan', keys: `${TOOL_KEYS.pointer} / ${TOOL_KEYS.pan}` },
   { action: 'Brush / eraser', keys: `${TOOL_KEYS.brush} / ${TOOL_KEYS.eraser}` },
   { action: 'Fill / pick label', keys: `${TOOL_KEYS.fill} / ${TOOL_KEYS.pick}` },

@@ -1,4 +1,4 @@
-import { OrbitView, type Layer, type PickingInfo } from '@deck.gl/core'
+import { OrbitView, type Layer, type OrbitViewState, type PickingInfo } from '@deck.gl/core'
 import { XR3DLayer } from '@hms-dbmi/viv'
 import type { CellRow, Level, VolumeBuffer } from '@cellstudio/api-client'
 import { GpuBudget, gpuBudget as defaultBudget } from '../data/gpuBudget'
@@ -23,11 +23,10 @@ import {
 } from '../layers/volume'
 import { vivLayer } from '../layers/viv'
 import type { PerfMonitor } from '../perf'
-import type { VolumeViewState } from '../state/nav'
+import type { OrbitCamera } from '../state/nav'
 import { Emitter, visibleChannels, type NavSnapshot, type SceneStatus } from './types'
 
-/** deck.gl `OrbitView` state. */
-export type OrbitCamera = VolumeViewState['camera']
+const FIT_ROTATION = { rotationX: 25, rotationOrbit: 25 }
 
 export interface VolumeSceneOptions {
   volumes: VolumeCache
@@ -36,7 +35,6 @@ export interface VolumeSceneOptions {
   budget?: GpuBudget
   renderingMode?: RenderingMode
   id?: string
-  /** Centroid pick; the session wires these to the nav store. */
   onSelect?: (cell: CellRow) => void
   onJumpToCell?: (cell: CellRow) => void
 }
@@ -48,10 +46,6 @@ interface Committed {
   channels: { index: number; buffer: VolumeBuffer }[]
 }
 
-/**
- * The 3D view: one orbit camera over viv's ray-cast layer, fed from `VolumeCache`, with
- * track trails in the same scene. Orbit and zoom touch no data.
- */
 export class VolumeScene {
   readonly id: string
   private readonly volumes: VolumeCache
@@ -71,7 +65,6 @@ export class VolumeScene {
   private pendingToken: string | null = null
   private lastT: number | null = null
   private tDirection: 1 | -1 = 1
-  private camera: OrbitCamera | null = null
   private unsubscribeTracks?: () => void
 
   constructor(opts: VolumeSceneOptions) {
@@ -96,12 +89,6 @@ export class VolumeScene {
     this.viewportSize = viewport
   }
 
-  /** Live orbit camera from deck's `onViewStateChange`; the frozen nav store has no setter. */
-  setCamera(camera: OrbitCamera | null): void {
-    this.camera = camera
-    this.changed.emit()
-  }
-
   setRenderingMode(mode: RenderingMode): void {
     this.renderingMode = mode
     this.changed.emit()
@@ -111,7 +98,6 @@ export class VolumeScene {
     return this.renderingMode
   }
 
-  /** Pyramid level the budget picked for the resident volume. */
   get volumeLevel(): number {
     return this.level
   }
@@ -121,34 +107,47 @@ export class VolumeScene {
   }
 
   view(): OrbitView {
-    return new OrbitView({ id: this.id, controller: true, orbitAxis: 'Y' })
+    return new OrbitView({
+      id: this.id,
+      orbitAxis: 'Y',
+      controller: {
+        scrollZoom: true,
+        dragPan: true,
+        dragRotate: true,
+        doubleClickZoom: true,
+        touchZoom: true,
+        touchRotate: false,
+        // the arrow keys already step t
+        keyboard: false,
+        inertia: 0,
+      },
+    })
   }
 
-  /** World box of the volume at its resident level, [x, y, z]. */
   extent(): WorldXYZ {
     const dims = this.nav?.project?.dims
     if (!dims) return [1, 1, 1]
     return volumeExtent(dims, this.transform)
   }
 
-  viewState(): {
-    target: [number, number, number]
-    zoom: number
-    rotationX: number
-    rotationOrbit: number
-  } {
-    const camera = this.camera ?? this.nav?.volume.camera
-    const fit = fitVolume(this.extent(), this.viewportSize)
-    const target =
-      camera && (camera.target[0] !== 0 || camera.target[1] !== 0 || camera.target[2] !== 0)
-        ? camera.target
-        : fit.target3d
-    return {
-      target: [target[0], target[1], target[2]],
-      zoom: camera && camera.zoom !== 0 ? camera.zoom : fit.zoom,
-      rotationX: camera?.rotationX ?? 25,
-      rotationOrbit: camera?.rotationOrbit ?? 25,
+  viewState(): OrbitViewState {
+    const camera = this.nav?.volume.camera
+    if (camera) {
+      return {
+        target: [...this.transform.toWorld(camera.target)],
+        zoom: camera.zoom,
+        rotationX: camera.rotationX,
+        rotationOrbit: camera.rotationOrbit,
+      }
     }
+    const fit = fitVolume(this.extent(), this.viewportSize)
+    return { ...FIT_ROTATION, zoom: fit.zoom, target: [...fit.target3d] }
+  }
+
+  cameraFrom(next: OrbitViewState): OrbitCamera {
+    const camera = this.pose(next)
+    const values = [camera.rotationX, camera.rotationOrbit, camera.zoom, ...camera.target]
+    return values.every(Number.isFinite) ? camera : this.pose(this.viewState())
   }
 
   update(nav: NavSnapshot): void {
@@ -185,6 +184,7 @@ export class VolumeScene {
       this.pendingToken = null
       return
     }
+    if (this.pendingToken === token) return
     this.pendingToken = token
     this.perf?.begin('t-step-3d', token)
     void this.latest
@@ -213,7 +213,6 @@ export class VolumeScene {
     this.volumes.prefetch(nav.t + this.tDirection)
   }
 
-  /** What the stage HUD reports, plus whether the current nav key is still in flight. */
   status(): SceneStatus {
     return {
       display: { level: this.level, zoom: this.viewState().zoom },
@@ -244,13 +243,12 @@ export class VolumeScene {
     return out
   }
 
-  /** Centroid picking: click selects, double-click jumps to the XY slice at that cell. */
-  handlePick(info: PickingInfo, doubleClick = false): CellRow | null {
+  handlePick(info: PickingInfo, jump = false): CellRow | null {
     const point = info.object as TrackPoint | undefined
     if (!point || typeof point.cellId !== 'number') return null
     const cell = this.tracksSource?.cell(point.cellId)
     if (!cell) return null
-    if (doubleClick) this.onJumpToCell?.(cell)
+    if (jump) this.onJumpToCell?.(cell)
     else this.onSelect?.(cell)
     return cell
   }
@@ -260,13 +258,11 @@ export class VolumeScene {
     this.perf?.frame()
   }
 
-  /** Drops everything the old backend session put here; the next update refetches. */
   reset(): void {
     this.latest.abort()
     this.committed = null
     this.pendingToken = null
     this.nav = null
-    this.camera = null
     this.lastT = null
     this.level = 0
     this.changed.emit()
@@ -276,6 +272,15 @@ export class VolumeScene {
     this.latest.abort()
     this.unsubscribeTracks?.()
     this.changed.clear()
+  }
+
+  private pose(state: OrbitViewState): OrbitCamera {
+    return {
+      rotationX: state.rotationX ?? FIT_ROTATION.rotationX,
+      rotationOrbit: state.rotationOrbit ?? FIT_ROTATION.rotationOrbit,
+      zoom: state.zoom,
+      target: this.transform.fromWorld(state.target),
+    }
   }
 
   private levelUnit(levels: readonly Level[], level: number): WorldXYZ {

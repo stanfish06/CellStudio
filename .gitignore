@@ -3,7 +3,6 @@ openspec
 
 # local experiment data
 *.ims
-data/
 .data/
 
 # frontend prototypes

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { CellRow, ChannelMeta, ProjectInfo } from '@cellstudio/api-client'
+import type { PixelZYX } from '../data/world'
 
 export type ActiveView = 'xy' | 'xz' | 'yz' | '3d'
 export type SliceOrientation = 'xy' | 'xz' | 'yz'
@@ -9,9 +10,7 @@ export interface ChannelState {
   name: string
   visible: boolean
   window: [number, number]
-  /** 0.20–3.00. */
   gamma: number
-  /** CSS color. */
   color: string
 }
 
@@ -21,13 +20,15 @@ export interface SliceViewState {
   camera: { target: [number, number]; zoom: number }
 }
 
+export interface OrbitCamera {
+  rotationX: number
+  rotationOrbit: number
+  zoom: number
+  target: PixelZYX
+}
+
 export interface VolumeViewState {
-  camera: {
-    rotationX: number
-    rotationOrbit: number
-    zoom: number
-    target: [number, number, number]
-  }
+  camera: OrbitCamera | null
 }
 
 export interface OverlayState {
@@ -35,10 +36,7 @@ export interface OverlayState {
   tracks: { on: boolean; opacity: number; trail: number }
 }
 
-/**
- * Display-only multipliers on top of the voxel-size aspect, global across views.
- * Never applied to reported coordinates, centroids, or picking.
- */
+// Aspects
 export interface AxisScale {
   z: number
   y: number
@@ -50,20 +48,17 @@ export const AXIS_SCALE_MAX = 10
 
 export interface NavState {
   project: ProjectInfo | null
-  /** One timeline: stepping t in any view steps it for the app. */
   t: number
   activeView: ActiveView
   slices: Record<SliceOrientation, SliceViewState>
   volume: VolumeViewState
   channels: ChannelState[]
-  /** Last-clicked channel square: what the readout reports and settings target. */
   activeChannel: number
   overlays: OverlayState
   axisScale: AxisScale
   transport: { playing: 'off' | 't' | 'slice' }
   tool: Tool
   selection: { cellId: number } | null
-  /** Bumped on every navigation change; results whose key is stale never commit. */
   generation: number
 
   initProject(project: ProjectInfo): void
@@ -81,7 +76,8 @@ export interface NavState {
   resetAxisScale(): void
   setTool(tool: Tool): void
   setPlaying(playing: 'off' | 't' | 'slice'): void
-  /** Stays in the current view unless `view` is given. */
+  setVolumeCamera(camera: OrbitCamera): void
+  resetVolumeCamera(): void
   jumpTo(pose: { t?: number; z?: number; y?: number; x?: number; view?: ActiveView }): void
   jumpToCell(cell: CellRow, view?: ActiveView): void
   select(cellId: number | null): void
@@ -91,7 +87,6 @@ const DEFAULT_COLORS = ['#ff5c73', '#52df83', '#5ba7ff', '#d67cff', '#ffb100', '
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
-/** Which axis a slice view steps along, and the dimension that bounds it. */
 export const sliceAxis = (o: SliceOrientation): 'z' | 'y' | 'x' =>
   o === 'xy' ? 'z' : o === 'xz' ? 'y' : 'x'
 
@@ -114,7 +109,7 @@ export const useNav = create<NavState>((set, get) => ({
   t: 0,
   activeView: 'xy',
   slices: { xy: emptySlice(), xz: emptySlice(), yz: emptySlice() },
-  volume: { camera: { rotationX: 25, rotationOrbit: 25, zoom: 0, target: [0, 0, 0] } },
+  volume: { camera: null },
   channels: [],
   activeChannel: 0,
   overlays: {
@@ -140,6 +135,7 @@ export const useNav = create<NavState>((set, get) => ({
         xz: { index: Math.floor(dims.y / 2), camera: { target: [0, 0], zoom: 0 } },
         yz: { index: Math.floor(dims.x / 2), camera: { target: [0, 0], zoom: 0 } },
       },
+      volume: { camera: null },
       generation: get().generation + 1,
     })
   },
@@ -228,6 +224,15 @@ export const useNav = create<NavState>((set, get) => ({
 
   setPlaying(playing) {
     set({ transport: { playing } })
+  },
+
+  setVolumeCamera(camera) {
+    set({ volume: { camera } })
+  },
+
+  resetVolumeCamera() {
+    if (get().volume.camera === null) return
+    set({ volume: { camera: null } })
   },
 
   jumpTo(pose) {

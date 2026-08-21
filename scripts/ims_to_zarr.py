@@ -395,7 +395,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--output",
         type=Path,
         default=None,
-        help="Output .zarr directory (default: data/<stem>.zarr)",
+        help="Output .zarr directory (default: .data/<stem>.zarr)",
     )
     parser.add_argument(
         "--inspect", action="store_true", help="Print IMS layout and exit"
@@ -422,7 +422,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     out_path = args.output
     if out_path is None:
-        out_path = Path("data") / f"{ims_path.stem}.zarr"
+        out_path = Path(".data") / f"{ims_path.stem}.zarr"
     convert(
         ims_path,
         out_path.expanduser().resolve(),

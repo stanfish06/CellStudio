@@ -1,10 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import DeckGL from '@deck.gl/react'
-import { OrbitView, OrthographicView, type PickingInfo } from '@deck.gl/core'
+import { OrthographicView, type OrbitViewState, type PickingInfo } from '@deck.gl/core'
 import { fromWorld, useNav, type ViewerSession } from '@cellstudio/viewer'
 
 const ORTHO = new OrthographicView({ id: 'slice', flipY: true })
-const ORBIT = new OrbitView({ id: 'volume' })
+
+const orbitTarget = (state: OrbitViewState): readonly number[] =>
+  Array.isArray(state.target) ? state.target : [0, 0, 0]
+
+export const sameOrbitState = (a: OrbitViewState, b: OrbitViewState): boolean => {
+  const [ax, ay, az] = orbitTarget(a)
+  const [bx, by, bz] = orbitTarget(b)
+  return (
+    a.zoom === b.zoom &&
+    a.rotationX === b.rotationX &&
+    a.rotationOrbit === b.rotationOrbit &&
+    ax === bx &&
+    ay === by &&
+    az === bz
+  )
+}
+
+export const isModified = (event: unknown): boolean => {
+  const src = (event as { srcEvent?: MouseEvent } | null)?.srcEvent
+  return Boolean(src && (src.altKey || src.ctrlKey || src.metaKey || src.shiftKey))
+}
 
 export function SceneCanvas({ session }: { session: ViewerSession | null }) {
   const host = useRef<HTMLDivElement | null>(null)
@@ -40,17 +60,24 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
 
   const scene = session?.scene(activeView) ?? null
   const is3d = activeView === '3d'
+  const volumeCamera = useNav((s) => s.volume.camera)
+  const setVolumeCamera = useNav((s) => s.setVolumeCamera)
 
   const layers = useMemo(
     () => scene?.layers() ?? [],
     [scene, tick, t, slices, channels, overlays, axisScale],
   )
 
+  const views = useMemo(
+    () => (is3d && session ? session.volumeScene.view() : ORTHO),
+    [is3d, session],
+  )
+
   const viewState = useMemo(() => {
     const state = scene?.viewState()
     if (!state) return { target: [0, 0, 0] as [number, number, number], zoom: 0 }
     return state
-  }, [scene, tick, t, slices, axisScale])
+  }, [scene, tick, t, slices, axisScale, volumeCamera])
 
   const activeChannel = useNav((s) => s.activeChannel)
   const sliceIndex = slices[activeView === '3d' ? 'xy' : activeView].index
@@ -70,22 +97,35 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
     [session, is3d, sliceIndex, t, activeChannel, overlays.labels.on, axisScale],
   )
 
-  const onClick = useCallback((info: PickingInfo) => scene?.handlePick(info) ?? null, [scene])
+  // A modifier click on a centroid jumps to XY; deck owns plain and modified double-click.
+  const onClick = useCallback(
+    (info: PickingInfo, event: unknown) => scene?.handlePick(info, isModified(event)) ?? null,
+    [scene],
+  )
 
   return (
-    <div ref={host} style={{ position: 'absolute', inset: '0' }}>
+    <div
+      ref={host}
+      style={{ position: 'absolute', inset: '0' }}
+      onContextMenu={is3d ? (e) => e.preventDefault() : undefined}
+    >
       {session && scene ? (
         <DeckGL
-          views={is3d ? ORBIT : ORTHO}
+          views={views}
           viewState={{ ...viewState }}
-          controller
+          controller={is3d ? undefined : true}
           layers={layers}
           onHover={onHover}
           onClick={onClick}
           onViewStateChange={({ viewState: next }: { viewState: unknown }) => {
+            if (is3d) {
+              const orbit = next as OrbitViewState
+              if (sameOrbitState(orbit, viewState as OrbitViewState)) return
+              setVolumeCamera(session.volumeScene.cameraFrom(orbit))
+              return
+            }
             const v = next as { target?: number[]; zoom?: number | number[] }
             const zoom = Array.isArray(v.zoom) ? (v.zoom[0] ?? 0) : (v.zoom ?? 0)
-            if (is3d) return
             const target = v.target ?? [0, 0]
             session.slices[activeView as 'xy' | 'xz' | 'yz'].setCamera({
               target: [target[0] ?? 0, target[1] ?? 0],

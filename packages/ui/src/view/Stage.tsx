@@ -4,7 +4,6 @@ import { hudChips, pixelsPerUm, scaleBar, type Chip } from '../lib/hud'
 import { cssVars, type DisplayState } from '../types'
 
 export interface StageProps {
-  /** The active scene from `@cellstudio/viewer`; the stage never reaches into it. */
   scene?: ReactNode
   display: DisplayState
 }
@@ -14,10 +13,12 @@ export function Stage({ scene, display }: StageProps) {
   const activeView = useNav((s) => s.activeView)
   const slices = useNav((s) => s.slices)
   const t = useNav((s) => s.t)
+  const volumeCamera = useNav((s) => s.volume.camera)
 
   const dims = project?.dims ?? null
   const orientation = activeView === '3d' ? null : activeView
   const axis = orientation ? sliceAxis(orientation) : null
+  const zoom = activeView === '3d' && volumeCamera ? volumeCamera.zoom : display.zoom
 
   const chips = hudChips({
     activeView,
@@ -32,10 +33,10 @@ export function Stage({ scene, display }: StageProps) {
     t,
     tMax: Math.max(0, (dims?.t ?? 1) - 1),
     level: display.level,
-    zoom: display.zoom,
+    zoom,
     scale: project?.scale ?? null,
   })
-  const bar = scaleBar(pixelsPerUm(project?.scale ?? null, display.zoom))
+  const bar = scaleBar(pixelsPerUm(project?.scale ?? null, zoom))
 
   return (
     <div className="stage">

@@ -1,6 +1,6 @@
 import type { Tool } from '@cellstudio/viewer'
-import { HelpIcon, TOOL_ICONS } from '../icons'
-import { TOOL_KEYS, TOOL_LABELS, isToolEnabled } from '../lib/keymap'
+import { HelpIcon, ResetViewIcon, TOOL_ICONS } from '../icons'
+import { RESET_VIEW_KEY, TOOL_KEYS, TOOL_LABELS, isToolEnabled } from '../lib/keymap'
 
 interface ToolGroup {
   caption: string
@@ -17,9 +17,11 @@ export interface RibbonProps {
   tool: Tool
   onTool: (tool: Tool) => void
   onShortcuts: () => void
+  onResetView: () => void
+  resetEnabled: boolean
 }
 
-export function Ribbon({ tool, onTool, onShortcuts }: RibbonProps) {
+export function Ribbon({ tool, onTool, onShortcuts, onResetView, resetEnabled }: RibbonProps) {
   return (
     <div className="ribbon" role="toolbar" aria-label="Editing tools">
       {GROUPS.map((group) => {
@@ -41,16 +43,33 @@ export function Ribbon({ tool, onTool, onShortcuts }: RibbonProps) {
               />
             ))}
             {group.caption === 'Navigation' ? (
-              <button
-                type="button"
-                className="ribbon-tool"
-                title="Keyboard shortcuts (?)"
-                onClick={onShortcuts}
-              >
-                <HelpIcon />
-                <span className="ribbon-label">Shortcuts</span>
-                <span className="key">?</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="ribbon-tool"
+                  title={
+                    resetEnabled
+                      ? `Reset view (${RESET_VIEW_KEY})`
+                      : `Reset view (${RESET_VIEW_KEY}) — 3D view only`
+                  }
+                  disabled={!resetEnabled}
+                  onClick={onResetView}
+                >
+                  <ResetViewIcon />
+                  <span className="ribbon-label">Reset view</span>
+                  <span className="key">{RESET_VIEW_KEY}</span>
+                </button>
+                <button
+                  type="button"
+                  className="ribbon-tool"
+                  title="Keyboard shortcuts (?)"
+                  onClick={onShortcuts}
+                >
+                  <HelpIcon />
+                  <span className="ribbon-label">Shortcuts</span>
+                  <span className="key">?</span>
+                </button>
+              </>
             ) : null}
             <span className="ribbon-group-title" id={captionId}>
               {group.caption}
