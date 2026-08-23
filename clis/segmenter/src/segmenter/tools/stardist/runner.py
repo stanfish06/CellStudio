@@ -25,6 +25,10 @@ def _preload_pip_cudnn() -> None:
 
 def run(cfg: StardistConfig, ctx: RunContext) -> dict:
     if ctx.gpu:
+        import os
+
+        # without this TF pre-allocates the whole GPU and XLA autotuning has no workspace
+        os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
         _preload_pip_cudnn()
     else:
         import tensorflow as tf
