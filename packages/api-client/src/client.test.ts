@@ -3,6 +3,7 @@ import {
   ApiClient,
   ApiError,
   BufferTooLargeError,
+  NoSessionError,
   SchemaError,
   StaleSessionError,
   isStaleSession,
@@ -306,5 +307,83 @@ describe('ApiClient session identity', () => {
     session = null
     await expect(api.jobs()).resolves.toEqual([])
     expect(api.sessionId).toBe('sess-2')
+  })
+})
+
+describe('ApiClient mask edits', () => {
+  const editResult = {
+    seq: 7,
+    version: 3,
+    sessionId: 'sess-1',
+    hasLabels: true,
+    cells: [],
+    removed: [42],
+    chunks: ['labels/0/0.0.0.0.0'],
+  }
+
+  async function opened(handler: (url: string, init?: RequestInit) => Response) {
+    const { fetch, calls } = recorder((url, init) =>
+      url.endsWith('/project/open')
+        ? json(projectInfo, { headers: { [SESSION]: 'sess-1' } })
+        : handler(url, init),
+    )
+    const api = new ApiClient({ baseUrl: 'http://127.0.0.1:7777', token: 'tok', fetch })
+    await api.openProject('/data/sample.zarr')
+    return { api, calls }
+  }
+
+  it('posts a stroke with the session it believes it is addressing', async () => {
+    const { api, calls } = await opened(() =>
+      json(editResult, { headers: { [SESSION]: 'sess-1' } }),
+    )
+
+    const result = await api.stroke({
+      t: 4,
+      label: 1000,
+      mode: 'paint',
+      radius: 8,
+      plane: 'z',
+      stamps: [[1, 2, 3]],
+      only: null,
+    })
+
+    const call = requireAt(calls, 1)
+    expect(call.url).toBe('http://127.0.0.1:7777/mask/stroke')
+    expect(call.init?.method).toBe('POST')
+    expect(new Headers(call.init?.headers).get(SESSION)).toBe('sess-1')
+    expect(JSON.parse(String(call.init?.body)).stamps).toEqual([[1, 2, 3]])
+    expect(result.removed).toEqual([42])
+  })
+
+  it('sends the session on every mutation and on none of the reads', async () => {
+    const { api, calls } = await opened((url) =>
+      url.includes('/mask/') || url.includes('/edits')
+        ? json(url.endsWith('/reserve') ? { first: 1000, count: 64 } : editResult, {
+            headers: { [SESSION]: 'sess-1' },
+          })
+        : json([], { headers: { [SESSION]: 'sess-1' } }),
+    )
+
+    await api.reserveLabels(64)
+    await api.deleteMask({ t: 4, label: 1000 })
+    await api.undo()
+    await api.redo()
+    await api.jobs()
+
+    const sessions = calls.slice(1).map((c) => new Headers(c.init?.headers).get(SESSION))
+    expect(sessions).toEqual(['sess-1', 'sess-1', 'sess-1', 'sess-1', null])
+  })
+
+  it('refuses to mutate before a session exists', async () => {
+    const { fetch } = recorder(() => json(editResult))
+    const api = new ApiClient({ baseUrl: 'http://127.0.0.1:7777', token: 'tok', fetch })
+
+    await expect(api.deleteMask({ t: 0, label: 1 })).rejects.toBeInstanceOf(NoSessionError)
+  })
+
+  it('raises StaleSessionError when the backend answers for another session', async () => {
+    const { api } = await opened(() => json(editResult, { headers: { [SESSION]: 'sess-2' } }))
+
+    await expect(api.undo()).rejects.toBeInstanceOf(StaleSessionError)
   })
 })

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { VolumeScene } from './volumeScene'
+import { VolumeScene, rayBoxInterval } from './volumeScene'
 import { GpuBudget } from '../data/gpuBudget'
 import { VolumeCache } from '../data/volumeCache'
 import { TrackSource } from '../data/trackSource'
 import { fitVolume } from '../data/world'
+import { MaskEditor } from '../edit/maskEditor'
 import { PerfMonitor } from '../perf'
 import { FakeApi, cell, devProject, layerProps, makeVolume, navSnapshot } from '../test/data'
 import type { PickingInfo } from '@deck.gl/core'
@@ -127,11 +128,12 @@ describe('VolumeScene', () => {
     // the dropped sentinels used to read this legitimate pose as "never moved"
     const origin = { rotationX: 0, rotationOrbit: 0, zoom: 0, target: [0, 0, 0] } as const
     scene.update(navSnapshot(project, { activeView: '3d', camera: origin }))
+    // voxel row 0 renders at the far end of y, so the origin's world y is the extent
     expect(scene.viewState()).toEqual({
       rotationX: 0,
       rotationOrbit: 0,
       zoom: 0,
-      target: [0, 0, 0],
+      target: [0, scene.extent()[1], 0],
     })
   })
 
@@ -240,5 +242,110 @@ describe('VolumeScene', () => {
     scene.markPresented()
     // 0, not 50, if the camera write had restarted the span
     expect(perf.stats('t-step-3d').max).toBe(50)
+  })
+})
+
+const labelSetup = (storePresent = true) => {
+  const base = setup()
+  const labelVolumes = new VolumeCache({ api: base.api, maxConcurrent: 8 })
+  const editor = new MaskEditor({ api: base.api, onCommit: () => {} })
+  editor.configure({ dims: [3, 1024, 1024], scale: null, storePresent })
+  return { ...base, labelVolumes, editor }
+}
+
+const OFF = { on: false, opacity: 0.36 }
+const ON = { on: true, opacity: 0.36 }
+
+describe('VolumeScene label overlay', () => {
+  const project = devProject({ hasLabels: true })
+
+  it('requests the label volume when the overlay turns on over a warm image volume', async () => {
+    const { api, volumes, budget, labelVolumes, editor } = labelSetup()
+    const scene = new VolumeScene({ volumes, labelVolumes, editor, budget })
+    // The overlay is not in the image token and toggling it bumps no generation, so the
+    // early return would evict nothing and request nothing (design M16).
+    scene.update(navSnapshot(project, { activeView: '3d', t: 5, labels: OFF }))
+    await settle()
+    const images = api.volumeCalls.filter((c) => c.q.layer === 'image').length
+    scene.update(navSnapshot(project, { activeView: '3d', t: 5, labels: ON }))
+    await settle()
+    expect(api.volumeCalls.filter((c) => c.q.layer === 'image')).toHaveLength(images)
+    expect(api.volumeCalls.filter((c) => c.q.layer === 'labels' && c.q.t === 5)).toHaveLength(1)
+    expect(scene.volume?.labels?.version).toBe(1)
+    expect(scene.layers().some((l) => l.id === 'volume-labels')).toBe(true)
+  })
+
+  it('requests no label volume while the project has no label store', async () => {
+    const { api, volumes, budget, labelVolumes, editor } = labelSetup(false)
+    const scene = new VolumeScene({ volumes, labelVolumes, editor, budget })
+    scene.update(navSnapshot(devProject(), { activeView: '3d', labels: ON }))
+    await settle()
+    expect(api.volumeCalls.every((c) => c.q.layer === 'image')).toBe(true)
+    expect(scene.layers().some((l) => l.id === 'volume-labels')).toBe(false)
+  })
+})
+
+describe('VolumeScene orb', () => {
+  const project = devProject({ hasLabels: true })
+  const depth = 3 * (2.0 / 0.603)
+
+  const scened = () => {
+    const { api, volumes, budget, labelVolumes, editor } = labelSetup()
+    const scene = new VolumeScene({ volumes, labelVolumes, editor, budget })
+    scene.setViewport({ width: 800, height: 600 })
+    scene.update(navSnapshot(project, { activeView: '3d', tool: 'brush', labels: ON }))
+    return { api, scene }
+  }
+
+  it('intersects the pointer ray with the volume box and seeds at the midpoint', () => {
+    const { scene } = scened()
+    scene.setPointerRay({ origin: [512, 512, -100], direction: [0, 0, 1] })
+    expect(scene.orbActive).toBe(true)
+    expect(scene.orbU).toBe(0.5)
+    const centre = scene.orbCentre()
+    expect(centre?.[0]).toBeCloseTo(1.5, 6)
+    expect(centre?.[1]).toBeCloseTo(512, 6)
+    expect(centre?.[2]).toBeCloseTo(512, 6)
+    expect(scene.layers().some((l) => l.id === 'volume-brush-cursor')).toBe(true)
+  })
+
+  it('shows no paintable cursor when the ray misses the volume', () => {
+    const { scene } = scened()
+    scene.setPointerRay({ origin: [-5000, 512, -100], direction: [0, 0, 1] })
+    expect(scene.orbActive).toBe(false)
+    expect(scene.orbCentre()).toBe(null)
+    expect(scene.layers().some((l) => l.id === 'volume-brush-cursor')).toBe(false)
+    scene.stepOrbU(400)
+    expect(scene.orbU).toBe(0.5)
+  })
+
+  it('moves the orb by wheel pixels and issues no request', async () => {
+    const { api, scene } = scened()
+    await settle()
+    const before = api.volumeCalls.length
+    scene.setPointerRay({ origin: [512, 512, -100], direction: [0, 0, 1] })
+    scene.stepOrbU(10)
+    // 10 px at a quarter world unit each, over the ray's span through the volume.
+    expect(scene.orbU).toBeCloseTo(0.5 + 2.5 / depth, 6)
+    scene.stepOrbU(10000)
+    expect(scene.orbU).toBe(1)
+    expect(api.volumeCalls).toHaveLength(before)
+  })
+
+  it('keeps the relative depth when the camera moves the ray', () => {
+    const { scene } = scened()
+    scene.setPointerRay({ origin: [512, 512, -100], direction: [0, 0, 1] })
+    scene.stepOrbU(10)
+    const u = scene.orbU
+    scene.setPointerRay({ origin: [-100, 512, 5], direction: [1, 0, 0] })
+    expect(scene.orbU).toBe(u)
+    const centre = scene.orbCentre()
+    expect(centre?.[2]).toBeCloseTo(u * 1024, 6)
+  })
+
+  it('reports a miss for a ray parallel to a face outside it', () => {
+    expect(rayBoxInterval([5, 5, -1], [0, 0, 1], [10, 10, 10])).toEqual({ near: 1, far: 11 })
+    expect(rayBoxInterval([20, 5, -1], [0, 0, 1], [10, 10, 10])).toBe(null)
+    expect(rayBoxInterval([5, 5, 20], [0, 0, 1], [10, 10, 10])).toBe(null)
   })
 })

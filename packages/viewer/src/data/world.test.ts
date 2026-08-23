@@ -7,6 +7,7 @@ import {
   sliceExtent,
   sliceWorldFromPixel,
   volumeExtent,
+  volumeFrame,
 } from './world'
 import { devProject } from '../test/data'
 
@@ -105,5 +106,37 @@ describe('thin-Z geometry', () => {
     const fit = fitVolume(stretched, { width: 900, height: 900 })
     expect(Number.isFinite(fit.zoom)).toBe(true)
     expect(fit.target3d[2]).toBeCloseTo(stretched[2] / 2, 10)
+  })
+})
+
+describe('volumeFrame', () => {
+  // 3 z-planes, 1024 square, the development dataset's anisotropy
+  const dims = { t: 277, c: 3, z: 3, y: 1024, x: 1024 }
+  const transform = makeWorldTransform(
+    { z: 2.0, y: 0.60296875, x: 0.6029296875 },
+    { z: 1, y: 1, x: 1 },
+  )
+  const frame = volumeFrame(transform, dims)
+
+  it('mirrors y, because viv draws voxel row 0 at the far end of the volume', () => {
+    const extentY = dims.y * transform.unit[1]
+    const [, worldY] = frame.toWorld([1, 0, 512])
+    expect(worldY).toBeCloseTo(extentY, 6)
+    expect(frame.toWorld([1, dims.y, 512])[1]).toBeCloseTo(0, 6)
+  })
+
+  it('round-trips, so the orb writes the voxel the cursor is over', () => {
+    const voxel: [number, number, number] = [1, 492, 409]
+    const back = frame.fromWorld(frame.toWorld(voxel))
+    expect(back[0]).toBeCloseTo(voxel[0], 6)
+    expect(back[1]).toBeCloseTo(voxel[1], 6)
+    expect(back[2]).toBeCloseTo(voxel[2], 6)
+  })
+
+  it('leaves x and z alone', () => {
+    const [x, , z] = frame.toWorld([1, 492, 409])
+    const [px, , pz] = transform.toWorld([1, 492, 409])
+    expect(x).toBe(px)
+    expect(z).toBe(pz)
   })
 })

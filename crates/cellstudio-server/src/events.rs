@@ -29,6 +29,9 @@ pub enum Event {
         job: JobState,
     },
     Invalidate {
+        /// Versions are not comparable across projects, so a renderer on another session
+        /// drops the event instead of invalidating its own caches (design M20).
+        session_id: String,
         layer: LayerId,
         chunks: Vec<String>,
         version: u64,

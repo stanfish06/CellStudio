@@ -1,6 +1,7 @@
-import type { Tool } from '@cellstudio/viewer'
-import { HelpIcon, ResetViewIcon, TOOL_ICONS } from '../icons'
-import { RESET_VIEW_KEY, TOOL_KEYS, TOOL_LABELS, isToolEnabled } from '../lib/keymap'
+import { BRUSH_RADIUS_MAX, BRUSH_RADIUS_MIN, type Tool } from '@cellstudio/viewer'
+import { useState } from 'react'
+import { DeleteMaskIcon, HelpIcon, ResetViewIcon, TOOL_ICONS } from '../icons'
+import { RESET_VIEW_KEY, TOOL_KEYS, TOOL_LABELS, isPaintTool, isToolEnabled } from '../lib/keymap'
 
 interface ToolGroup {
   caption: string
@@ -19,9 +20,24 @@ export interface RibbonProps {
   onShortcuts: () => void
   onResetView: () => void
   resetEnabled: boolean
+  brushRadius: number
+  onBrushRadius: (radius: number) => void
+  onDeleteMask: () => void
+  /** True only while a cell that exists on the current frame is selected. */
+  deleteEnabled: boolean
 }
 
-export function Ribbon({ tool, onTool, onShortcuts, onResetView, resetEnabled }: RibbonProps) {
+export function Ribbon({
+  tool,
+  onTool,
+  onShortcuts,
+  onResetView,
+  resetEnabled,
+  brushRadius,
+  onBrushRadius,
+  onDeleteMask,
+  deleteEnabled,
+}: RibbonProps) {
   return (
     <div className="ribbon" role="toolbar" aria-label="Editing tools">
       {GROUPS.map((group) => {
@@ -71,12 +87,88 @@ export function Ribbon({ tool, onTool, onShortcuts, onResetView, resetEnabled }:
                 </button>
               </>
             ) : null}
+            {group.caption === 'Mask edit' ? (
+              <>
+                <button
+                  type="button"
+                  className="ribbon-tool"
+                  title={
+                    deleteEnabled
+                      ? 'Delete mask on this frame (Del)'
+                      : 'Delete mask on this frame (Del) — select a cell on this frame'
+                  }
+                  disabled={!deleteEnabled}
+                  onClick={onDeleteMask}
+                >
+                  <DeleteMaskIcon />
+                  <span className="ribbon-label">Delete mask</span>
+                  <span className="key">Del</span>
+                </button>
+                <BrushRadius
+                  radius={brushRadius}
+                  onRadius={onBrushRadius}
+                  disabled={!isPaintTool(tool)}
+                />
+              </>
+            ) : null}
             <span className="ribbon-group-title" id={captionId}>
               {group.caption}
             </span>
           </div>
         )
       })}
+    </div>
+  )
+}
+
+interface BrushRadiusProps {
+  radius: number
+  onRadius: (radius: number) => void
+  disabled: boolean
+}
+
+/** The slot is present for every tool and disabled outside the paint tools, so the shell
+ * keeps its geometry as the tool changes. */
+function BrushRadius({ radius, onRadius, disabled }: BrushRadiusProps) {
+  const [draft, setDraft] = useState<string | null>(null)
+
+  const commit = () => {
+    if (draft === null) return
+    const parsed = Number(draft)
+    setDraft(null)
+    // The store clamps to 1–200; a half-typed or empty field commits nothing.
+    if (draft.trim() !== '' && Number.isFinite(parsed)) onRadius(parsed)
+  }
+
+  return (
+    <div className={disabled ? 'ribbon-field disabled' : 'ribbon-field'}>
+      <label htmlFor="brush-radius">Radius</label>
+      <input
+        id="brush-radius"
+        type="number"
+        min={BRUSH_RADIUS_MIN}
+        max={BRUSH_RADIUS_MAX}
+        step={1}
+        value={draft ?? radius}
+        disabled={disabled}
+        title={`Brush radius in dataset pixels (- / =), ${BRUSH_RADIUS_MIN}–${BRUSH_RADIUS_MAX}`}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') setDraft(null)
+        }}
+      />
+      <input
+        type="range"
+        aria-label="Brush radius"
+        min={BRUSH_RADIUS_MIN}
+        max={BRUSH_RADIUS_MAX}
+        step={1}
+        value={radius}
+        disabled={disabled}
+        onChange={(e) => onRadius(Number(e.target.value))}
+      />
     </div>
   )
 }

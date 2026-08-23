@@ -94,8 +94,12 @@ export class CursorReadout {
     return this.changed.on(cb)
   }
 
-  /** Pointer position in dataset pixels. */
-  move(pixel: PixelZYX, ctx: CursorContext): void {
+  /**
+   * An explicit sample point in dataset pixels, floored to the voxel that contains it —
+   * a slice hover, or the 3D orb centre while a paint tool is active (design M12).
+   */
+  move(sample: PixelZYX, ctx: CursorContext): void {
+    const pixel: PixelZYX = [Math.floor(sample[0]), Math.floor(sample[1]), Math.floor(sample[2])]
     this.pending = { pixel, t: ctx.t, channel: ctx.channel, labels: ctx.labels ?? false }
     this.current = { ...at(pixel), value: null, labelId: null, trackId: null }
     this.changed.emit()

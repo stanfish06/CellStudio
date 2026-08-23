@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { BackendInfo, BackendState } from '../shared/bridge'
@@ -19,11 +19,12 @@ function resolveBinary(): string {
   const packaged = join(process.resourcesPath ?? '', 'bin', 'cellstudio-server')
   if (app.isPackaged) return packaged
   const root = join(app.getAppPath(), '..', '..')
-  for (const profile of ['release', 'debug']) {
-    const candidate = join(root, 'target', profile, 'cellstudio-server')
-    if (existsSync(candidate)) return candidate
-  }
-  return join(root, 'target', 'debug', 'cellstudio-server')
+  const debug = join(root, 'target', 'debug', 'cellstudio-server')
+  const release = join(root, 'target', 'release', 'cellstudio-server')
+  // newest wins: a stale release build must not shadow the one the dev loop just made
+  const built = [release, debug].filter(existsSync)
+  built.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  return built[0] ?? debug
 }
 
 export class BackendSupervisor {

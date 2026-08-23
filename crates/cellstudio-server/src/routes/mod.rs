@@ -1,5 +1,6 @@
 pub mod graph;
 pub mod io;
+pub mod mask;
 pub mod pixels;
 pub mod project;
 pub mod store;
@@ -30,6 +31,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/cells", get(graph::cells))
         .route("/lineage", get(graph::lineage))
         .route("/edits", get(graph::edits))
+        .route("/edits/undo", post(graph::undo))
+        .route("/edits/redo", post(graph::redo))
+        .route("/mask/reserve", post(mask::reserve))
+        .route("/mask/stroke", post(mask::stroke))
+        .route("/mask/delete", post(mask::delete))
         .route("/jobs", get(io::list_jobs))
         .route("/import/{kind}", post(io::start_import))
         .route("/rechunk", post(io::start_rechunk))

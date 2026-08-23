@@ -31,7 +31,10 @@ export const TOOL_LABELS: Record<Tool, string> = {
   cut: 'Cut link',
 }
 
-export const ENABLED_TOOLS: readonly Tool[] = ['pointer', 'pan']
+export const ENABLED_TOOLS: readonly Tool[] = ['pointer', 'pan', 'brush', 'eraser']
+
+/** Tools that stamp the brush radius; the radius control follows this set. */
+export const PAINT_TOOLS: readonly Tool[] = ['brush', 'eraser']
 
 export const LARGE_STEP = 10
 
@@ -43,6 +46,10 @@ export type KeyAction =
   | { kind: 'stepT'; delta: number }
   | { kind: 'stepSlice'; delta: number }
   | { kind: 'tool'; tool: Tool }
+  | { kind: 'brushRadius'; delta: number }
+  | { kind: 'deleteMask' }
+  | { kind: 'undo' }
+  | { kind: 'redo' }
   | { kind: 'resetView' }
   | { kind: 'shortcuts' }
   | { kind: 'dismiss' }
@@ -63,9 +70,20 @@ export function isToolEnabled(tool: Tool): boolean {
   return ENABLED_TOOLS.includes(tool)
 }
 
+export function isPaintTool(tool: Tool): boolean {
+  return PAINT_TOOLS.includes(tool)
+}
+
 export function resolveKey(e: KeyLike): KeyAction | null {
   if (e.key === 'Escape') return { kind: 'dismiss' }
-  if (e.ctrlKey === true || e.metaKey === true || e.altKey === true) return null
+
+  // Undo and redo are the only chords; every other binding is rejected when modified,
+  // so accelerators keep reaching the menus.
+  const accel = e.ctrlKey === true || e.metaKey === true
+  if (accel && e.altKey !== true && e.key.length === 1 && e.key.toUpperCase() === 'Z') {
+    return e.shiftKey === true ? { kind: 'redo' } : { kind: 'undo' }
+  }
+  if (accel || e.altKey === true) return null
   if (e.key === '?') return { kind: 'shortcuts' }
 
   const viewIndex = '1234'.indexOf(e.key)
@@ -84,6 +102,16 @@ export function resolveKey(e: KeyLike): KeyAction | null {
       return { kind: 'stepSlice', delta }
     case '[':
       return { kind: 'stepSlice', delta: -delta }
+    // Shifted on a US layout these arrive as `_` and `+`, so both spellings bind.
+    case '=':
+    case '+':
+      return { kind: 'brushRadius', delta }
+    case '-':
+    case '_':
+      return { kind: 'brushRadius', delta: -delta }
+    case 'Delete':
+    case 'Backspace':
+      return { kind: 'deleteMask' }
   }
 
   if (e.key.length !== 1) return null
@@ -115,6 +143,12 @@ export const SHORTCUTS: readonly ShortcutRow[] = [
   { action: 'Brush / eraser', keys: `${TOOL_KEYS.brush} / ${TOOL_KEYS.eraser}` },
   { action: 'Fill / pick label', keys: `${TOOL_KEYS.fill} / ${TOOL_KEYS.pick}` },
   { action: 'Link / cut link', keys: `${TOOL_KEYS.link} / ${TOOL_KEYS.cut}` },
+  { action: 'Brush radius down / up', keys: '- / =' },
+  { action: 'Brush radius (over the view)', keys: 'Shift+wheel' },
+  { action: 'Pan or orbit while painting', keys: 'Alt+drag' },
+  { action: 'Delete selected mask', keys: 'Del / Backspace' },
+  { action: 'Undo', keys: 'Ctrl/Cmd+Z' },
+  { action: 'Redo', keys: 'Ctrl/Cmd+Shift+Z' },
   { action: 'Keyboard shortcuts', keys: '?' },
   { action: 'Close dialog or popover', keys: 'Esc' },
 ]

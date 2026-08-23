@@ -1,6 +1,24 @@
 export { GAMMA_MAX, GAMMA_MIN, GammaExtension, clampGamma } from './gamma'
 export type { GammaExtensionProps } from './gamma'
 export {
+  LABEL_MODULE_NAME,
+  LABEL_PALETTE,
+  LABEL_PALETTE_SIZE,
+  LabelPaletteExtension,
+  MAX_LABEL_ID,
+  MIN_LABEL_LIGHTNESS,
+  clampLabelId,
+  clampOpacity,
+  labelColor,
+  labelPlaneExtensions,
+  labelPlaneProps,
+} from './labelPalette'
+export { distinguishableColors, srgbToLab } from './palette'
+export type { Rgb01 } from './palette'
+export type { LabelPaletteExtensionProps, LabelPlaneArgs, LabelPlaneProps } from './labelPalette'
+export { LabelVolumeLayer, labelVolumeExtension, labelVolumeProps } from './labelVolume'
+export type { LabelVolumeArgs, LabelVolumeProps } from './labelVolume'
+export {
   OrthoPlaneLayer,
   hexToRgb,
   orthoPlaneExtensions,

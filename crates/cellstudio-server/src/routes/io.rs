@@ -15,7 +15,7 @@ use serde::Deserialize;
 use crate::auth::json_body;
 use crate::error::{ApiError, ApiResult};
 use crate::jobs::{JobHandle, JobKind};
-use crate::routes::project::{bump_and_announce, session_json, session_response};
+use crate::routes::project::{bump_and_announce, register_labels, session_json, session_response};
 use crate::state::{ActiveProject, AppState, WORKING_COPY_NAME};
 use crate::wire::JobRef;
 
@@ -74,7 +74,13 @@ pub async fn start_import(
             "tracking import is not implemented yet (needs cellstudio-core::tracks::parse_stream \
              and cellstudio-db staged import)"
         }
-        _ => "label mask import is not implemented yet (needs cellstudio-core label import)",
+        _ => {
+            "label mask import is not implemented yet (needs cellstudio-core label import). \
+             An importer owes more than the voxels: it must seed mask_labels with every \
+             (t, label) it writes and mask_extent with each label's exact area and centroid \
+             sums, or id reservation re-issues a live id and incremental cell stats count \
+             only the voxels this session painted"
+        }
     });
     Ok(session_json(&active.session_id, JobRef { id }))
 }
@@ -142,6 +148,11 @@ fn adopt_working_copy(
         Err(e) => return handle.fail(format!("working copy is not readable: {e}")),
     };
     let image = Arc::new(ImageReader::new(Arc::new(dataset), cache_bytes));
+    // the rebuilt reader knows no layers; without this the label overlay silently disappears
+    // after a re-chunk for the rest of the session (design M1)
+    if let Err(e) = register_labels(&previous.project, &image) {
+        return handle.fail(format!("label store cannot be re-registered: {e}"));
+    }
     if let Some(level) = previous.image.proxy_level() {
         tracing::debug!(
             level,
@@ -152,6 +163,7 @@ fn adopt_working_copy(
         session_id: previous.session_id.clone(),
         image,
         project: previous.project.clone(),
+        coordinator: previous.coordinator.clone(),
         source: previous.source.clone(),
         assembled_root: path.to_path_buf(),
         layout: previous.layout.clone(),

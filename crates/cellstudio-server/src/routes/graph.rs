@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::Response;
 use cellstudio_db::queries::Bbox;
 use serde::Deserialize;
 
+use crate::edit::MaskCommand;
 use crate::error::{ApiError, ApiResult};
+use crate::routes::mask;
 use crate::routes::project::session_json;
 use crate::state::AppState;
 use crate::wire::{CellRowWire, EditEntryWire, LineageTreeWire};
@@ -63,6 +66,19 @@ pub async fn edits(
     let entries = active.project.db.edits(limit)?;
     let wire: Vec<EditEntryWire> = entries.iter().map(EditEntryWire::from).collect();
     Ok(session_json(&active.session_id, wire))
+}
+
+/// The unified undo: the newest un-undone row whatever its domain, dispatched on it by the
+/// coordinator. The mask arm is implemented; the graph arm is unreachable until something can
+/// write a `domain = 'graph'` row (design M7).
+pub async fn undo(State(state): State<Arc<AppState>>, headers: HeaderMap) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    mask::run(&state, active, MaskCommand::Undo).await
+}
+
+pub async fn redo(State(state): State<Arc<AppState>>, headers: HeaderMap) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    mask::run(&state, active, MaskCommand::Redo).await
 }
 
 fn parse_bbox(raw: &str) -> ApiResult<Bbox> {

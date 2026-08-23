@@ -27,11 +27,7 @@ export function makeWorldTransform(
   const isotropicFallback = scale === null || !(scale.x > 0 && scale.y > 0 && scale.z > 0)
   const physical = isotropicFallback ? { z: 1, y: 1, x: 1 } : (scale as PhysicalScale)
   const base = physical.x * axisScale.x
-  const unit: WorldXYZ = [
-    1,
-    (physical.y * axisScale.y) / base,
-    (physical.z * axisScale.z) / base,
-  ]
+  const unit: WorldXYZ = [1, (physical.y * axisScale.y) / base, (physical.z * axisScale.z) / base]
   return {
     unit,
     isotropicFallback,
@@ -71,11 +67,7 @@ export interface Extent2D {
   pixelHeight: number
 }
 
-export function sliceExtent(
-  o: SliceOrientation,
-  dims: Dims,
-  transform: WorldTransform,
-): Extent2D {
+export function sliceExtent(o: SliceOrientation, dims: Dims, transform: WorldTransform): Extent2D {
   const axes = sliceAxes(o)
   const unitOf = { x: transform.unit[0], y: transform.unit[1], z: transform.unit[2] }
   return {
@@ -87,6 +79,25 @@ export function sliceExtent(
 }
 
 /** World-space box of the whole volume, [x, y, z]. */
+/**
+ * The 3D volume's frame. viv's `XR3DLayer` is written against viv's own loader, which
+ * assembles the buffer with every z-plane's rows reversed, and its shader samples the
+ * texture straight — so a volume packed that way draws voxel row 0 at `extent - 0`, not
+ * at 0. Anything converting between voxels and 3D world space goes through this, or the
+ * cursor and the voxels it writes end up mirrored about the volume's y centre.
+ */
+export function volumeFrame(transform: WorldTransform, dims: Dims): WorldTransform {
+  const extentY = dims.y * transform.unit[1]
+  return {
+    ...transform,
+    toWorld: (px) => {
+      const [x, y, z] = transform.toWorld(px)
+      return [x, extentY - y, z]
+    },
+    fromWorld: ([x, y, z]) => transform.fromWorld([x, extentY - y, z]),
+  }
+}
+
 export const volumeExtent = (dims: Dims, transform: WorldTransform): WorldXYZ => [
   dims.x * transform.unit[0],
   dims.y * transform.unit[1],

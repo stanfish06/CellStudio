@@ -3,6 +3,7 @@ import type { PickingInfo } from '@deck.gl/core'
 import { SliceScene } from './sliceScene'
 import { PlaneCache } from '../data/planeCache'
 import { TrackSource } from '../data/trackSource'
+import { MaskEditor } from '../edit/maskEditor'
 import { PerfMonitor } from '../perf'
 import { FakeApi, cell, devProject, layerProps, makePlane, navSnapshot } from '../test/data'
 
@@ -13,6 +14,14 @@ const setup = (auto = true) => {
   const perf = new PerfMonitor()
   return { api, planes, perf }
 }
+
+const labelEditor = (api: FakeApi, storePresent: boolean): MaskEditor => {
+  const editor = new MaskEditor({ api, onCommit: () => {} })
+  editor.configure({ dims: [3, 1024, 1024], scale: null, storePresent })
+  return editor
+}
+
+const labelCalls = (api: FakeApi) => api.sliceCalls.filter((c) => c.q.layer === 'labels')
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
@@ -248,5 +257,103 @@ describe('SliceScene track overlay', () => {
     expect(overlay.slab).toBe(0)
     expect(overlay.cells).toHaveLength(2)
     expect(api.cellCalls[0]).toMatchObject({ t0: 0 })
+  })
+})
+
+describe('SliceScene label overlay', () => {
+  const project = devProject({ hasLabels: true })
+
+  it('requests nothing while the project has no label store', async () => {
+    const { api, planes } = setup()
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes,
+      api,
+      editor: labelEditor(api, false),
+    })
+    scene.update(navSnapshot(devProject(), { activeView: 'xz' }))
+    await settle()
+    expect(labelCalls(api)).toHaveLength(0)
+    expect(scene.layers().some((l) => l.id.endsWith('-labels'))).toBe(false)
+  })
+
+  it('requests the label plane for the current slice and draws it over the image', async () => {
+    const { api, planes } = setup()
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes,
+      api,
+      editor: labelEditor(api, true),
+    })
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    expect(labelCalls(api)[0]?.q).toMatchObject({ axis: 'xz', pos: 512, cs: [0], level: 0, t: 0 })
+    const ids = scene.layers().map((l) => l.id)
+    expect(ids.indexOf('slice-xz-labels')).toBe(ids.indexOf('slice-xz-plane') + 1)
+    expect(layerProps(scene.layers()[1]).labelOpacity).toBeCloseTo(0.36, 6)
+  })
+
+  it("re-requests on a zoom that moves the level, in that level's coordinates", async () => {
+    const { api, planes } = setup()
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes,
+      api,
+      editor: labelEditor(api, true),
+    })
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    api.sliceCalls.length = 0
+    scene.setCamera({ target: [512, 5], zoom: -2 })
+    await settle()
+    // level 2 is 4x downsampled in y, and `/slice` indexes in level coordinates.
+    expect(labelCalls(api)[0]?.q).toMatchObject({ level: 2, pos: 128 })
+    expect(api.sliceCalls.some((c) => c.q.layer === 'image')).toBe(false)
+  })
+
+  it('selects the cell under a label voxel, through its own pixel lookup', async () => {
+    const { api, planes } = setup()
+    api.labelValue = 42
+    const selected: number[] = []
+    const scene = new SliceScene({
+      orientation: 'xy',
+      planes,
+      api,
+      editor: labelEditor(api, true),
+      onSelectLabel: (id) => selected.push(id),
+    })
+    scene.update(navSnapshot(project, { index: { xy: 1 } }))
+    scene.handlePick({ coordinate: [100, 200] } as unknown as PickingInfo)
+    await settle()
+    expect(selected).toEqual([42])
+    expect(api.pixelCalls[0]).toMatchObject({ layer: 'labels', t: 0, c: 0, z: 1, y: 200, x: 100 })
+  })
+
+  it('draws the brush cursor and resizes it with no request', async () => {
+    const { api, planes } = setup()
+    const scene = new SliceScene({
+      orientation: 'xy',
+      planes,
+      api,
+      editor: labelEditor(api, true),
+    })
+    scene.update(navSnapshot(project, { tool: 'brush', brushRadius: 8 }))
+    await settle()
+    scene.setPointer([100, 200])
+    const before = api.sliceCalls.length
+    const cursor = () => scene.layers().find((l) => l.id === 'slice-xy-brush-cursor')
+    expect(layerProps(cursor()).getRadius).toBe(8)
+    scene.update(navSnapshot(project, { tool: 'brush', brushRadius: 20 }))
+    await settle()
+    expect(layerProps(cursor()).getRadius).toBe(20)
+    expect(api.sliceCalls).toHaveLength(before)
+  })
+
+  it('draws no cursor without a paint tool', () => {
+    const { api, planes } = setup()
+    const scene = new SliceScene({ orientation: 'xy', planes, api })
+    scene.update(navSnapshot(project, { tool: 'pointer' }))
+    scene.setPointer([100, 200])
+    expect(scene.layers().some((l) => l.id.endsWith('-brush-cursor'))).toBe(false)
   })
 })

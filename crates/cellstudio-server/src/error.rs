@@ -2,10 +2,13 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use cellstudio_core::dataset::OpenError;
+use cellstudio_core::labels::LabelError;
 use cellstudio_core::reader::ReadError;
 use cellstudio_core::rechunk::RechunkError;
 use cellstudio_core::volume::ProxyError;
 use cellstudio_db::{DbError, OpenError as ProjectError};
+
+use crate::edit::EditError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -19,6 +22,15 @@ pub enum ApiError {
     BadRequest(String),
     #[error("{0}")]
     NotFound(String),
+    #[error("{0}")]
+    Conflict(String),
+    #[error(
+        "session {presented} is not the open session; the project was replaced, so this \
+         request was refused before anything was read or written"
+    )]
+    StaleSession { presented: String },
+    #[error("{0}")]
+    NotImplemented(String),
     #[error("dataset cannot be opened: {0}")]
     Dataset(#[from] OpenError),
     #[error("read failed: {0}")]
@@ -39,6 +51,8 @@ impl ApiError {
     pub fn status(&self) -> StatusCode {
         match self {
             ApiError::NoProject | ApiError::NotFound(_) => StatusCode::NOT_FOUND,
+            ApiError::Conflict(_) | ApiError::StaleSession { .. } => StatusCode::CONFLICT,
+            ApiError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
             ApiError::Origin(_) => StatusCode::FORBIDDEN,
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
@@ -59,7 +73,10 @@ impl ApiError {
             },
             ApiError::Db(e) => match e {
                 DbError::UnknownCell(_) => StatusCode::NOT_FOUND,
-                DbError::AlreadyOpen(_) => StatusCode::CONFLICT,
+                DbError::AlreadyOpen(_)
+                | DbError::LabelFrameConflict { .. }
+                | DbError::LabelIdTaken(_)
+                | DbError::LabelIdsExhausted { .. } => StatusCode::CONFLICT,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             },
             ApiError::Proxy(_) | ApiError::Rechunk(_) | ApiError::Internal(_) => {
@@ -79,6 +96,26 @@ impl IntoResponse for ApiError {
             tracing::debug!(status = status.as_u16(), "{message}");
         }
         (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+/// Mask edits fail as client errors far more often than as server ones: an id that was not
+/// reserved, an id already living on another frame, an empty undo stack.
+impl From<EditError> for ApiError {
+    fn from(e: EditError) -> Self {
+        match e {
+            EditError::Labels(LabelError::Contract(_)) | EditError::Invalid(_) => {
+                ApiError::BadRequest(e.to_string())
+            }
+            EditError::Unreserved(_) | EditError::NothingTo(_) | EditError::Pruned(_) => {
+                ApiError::Conflict(e.to_string())
+            }
+            EditError::NoStore(_) => ApiError::NotFound(e.to_string()),
+            EditError::GraphDomain(_) => ApiError::NotImplemented(e.to_string()),
+            EditError::Db(db) => ApiError::Db(db),
+            EditError::Dataset(source) => ApiError::Dataset(source),
+            EditError::Labels(_) | EditError::Journal { .. } => ApiError::Internal(e.to_string()),
+        }
     }
 }
 

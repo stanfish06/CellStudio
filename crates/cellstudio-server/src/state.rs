@@ -13,6 +13,7 @@ use parking_lot::RwLock;
 use tokio::sync::Semaphore;
 
 use crate::auth::Tickets;
+use crate::edit::ProjectEditCoordinator;
 use crate::error::{ApiError, ApiResult};
 use crate::events::EventBus;
 use crate::jobs::Jobs;
@@ -56,6 +57,9 @@ pub struct ActiveProject {
     pub session_id: String,
     pub image: Arc<ImageReader>,
     pub project: Arc<Project>,
+    /// Shared with every other wrapper over the same store, reopen included: a lock on the
+    /// wrapper would be a different lock after a reopen (design M20).
+    pub coordinator: Arc<ProjectEditCoordinator>,
     pub source: PathBuf,
     pub assembled_root: PathBuf,
     pub layout: LayoutReport,
@@ -133,6 +137,19 @@ impl AppState {
 
     pub fn require(&self) -> ApiResult<Arc<ActiveProject>> {
         self.current().ok_or(ApiError::NoProject)
+    }
+
+    /// The open project, only if it is the one `session` addresses. Resolving and comparing
+    /// under one read of the slot is what makes a mutation's fence a precondition: a stale
+    /// request never reaches a lock, let alone a write (design M20).
+    pub fn require_for(&self, session: &str) -> ApiResult<Arc<ActiveProject>> {
+        let active = self.active.read().clone().ok_or(ApiError::NoProject)?;
+        if active.session_id != session {
+            return Err(ApiError::StaleSession {
+                presented: session.to_owned(),
+            });
+        }
+        Ok(active)
     }
 
     pub fn session(&self) -> Option<String> {

@@ -31,6 +31,14 @@ export interface VolumeViewState {
   camera: OrbitCamera | null
 }
 
+export interface BrushState {
+  /** Stamp radius in level-0 dataset pixels along x; other axes scale by voxel size. */
+  radius: number
+}
+
+export const BRUSH_RADIUS_MIN = 1
+export const BRUSH_RADIUS_MAX = 200
+
 export interface OverlayState {
   labels: { on: boolean; opacity: number }
   tracks: { on: boolean; opacity: number; trail: number }
@@ -55,6 +63,7 @@ export interface NavState {
   channels: ChannelState[]
   activeChannel: number
   overlays: OverlayState
+  brush: BrushState
   axisScale: AxisScale
   transport: { playing: 'off' | 't' | 'slice' }
   tool: Tool
@@ -72,6 +81,8 @@ export interface NavState {
   toggleChannel(index: number): void
   showAllChannels(): void
   setOverlays(patch: Partial<OverlayState>): void
+  setBrushRadius(radius: number): void
+  setLabelsVersion(version: number): void
   setAxisScale(patch: Partial<AxisScale>): void
   resetAxisScale(): void
   setTool(tool: Tool): void
@@ -116,6 +127,7 @@ export const useNav = create<NavState>((set, get) => ({
     labels: { on: true, opacity: 0.36 },
     tracks: { on: true, opacity: 0.85, trail: 6 },
   },
+  brush: { radius: 8 },
   axisScale: { z: 1, y: 1, x: 1 },
   transport: { playing: 'off' },
   tool: 'pointer',
@@ -201,6 +213,17 @@ export const useNav = create<NavState>((set, get) => ({
 
   setOverlays(patch) {
     set({ overlays: { ...get().overlays, ...patch } })
+  },
+
+  setBrushRadius(radius) {
+    set({ brush: { radius: clamp(Math.round(radius), BRUSH_RADIUS_MIN, BRUSH_RADIUS_MAX) } })
+  },
+
+  /** A committed mask edit, without a `generation` bump: only the label fetch reruns. */
+  setLabelsVersion(version) {
+    const project = get().project
+    if (!project || project.versions.labels >= version) return
+    set({ project: { ...project, versions: { ...project.versions, labels: version } } })
   },
 
   setAxisScale(patch) {

@@ -109,6 +109,24 @@ impl Server {
         self.client.post(self.url(path)).bearer_auth(&self.token)
     }
 
+    /// POST carrying the session fence every project mutation requires.
+    pub fn post_as(&self, path: &str, session: &str, body: &Value) -> reqwest::blocking::Response {
+        self.post(path)
+            .header(cellstudio_server::wire::SESSION_HEADER, session)
+            .json(body)
+            .send()
+            .expect("request")
+    }
+
+    /// A mutation under the current session, asserted to succeed.
+    pub fn mutate(&self, path: &str, body: Value) -> Value {
+        let response = self.post_as(path, &self.session(), &body);
+        let status = response.status();
+        let text = response.text().expect("body");
+        assert!(status.is_success(), "POST {path} -> {status}: {text}");
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("POST {path} body {text:?}: {e}"))
+    }
+
     pub fn put(&self, path: &str) -> reqwest::blocking::RequestBuilder {
         self.client.put(self.url(path)).bearer_auth(&self.token)
     }
@@ -342,6 +360,14 @@ impl Binary {
         }
     }
 
+    pub fn u32_values(&self) -> Vec<u32> {
+        assert_eq!(self.dtype, "u32");
+        self.bytes
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect()
+    }
+
     pub fn u16_values(&self) -> Vec<u16> {
         assert_eq!(self.dtype, "u16");
         self.bytes
@@ -371,10 +397,7 @@ fn data_dir() -> PathBuf {
 /// Path to one artifact inside a named data store.
 pub fn data(name: &str, artifact: &str) -> PathBuf {
     let path = data_dir().join(name).join(artifact);
-    assert!(
-        path.exists(),
-        "missing data {path:?} (run `mise run data`)"
-    );
+    assert!(path.exists(), "missing data {path:?} (run `mise run data`)");
     path
 }
 
@@ -387,7 +410,7 @@ pub fn data_copy(dir: &tempfile::TempDir, name: &str, artifact: &str) -> PathBuf
     target
 }
 
-fn copy_tree(from: &Path, to: &Path) {
+pub fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).expect("create dir");
     for entry in std::fs::read_dir(from).expect("read dir") {
         let entry = entry.expect("dir entry");

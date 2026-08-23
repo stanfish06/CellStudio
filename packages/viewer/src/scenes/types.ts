@@ -12,6 +12,8 @@ export type NavSnapshot = Pick<
   | 'channels'
   | 'activeChannel'
   | 'overlays'
+  | 'brush'
+  | 'tool'
   | 'axisScale'
   | 'selection'
   | 'generation'

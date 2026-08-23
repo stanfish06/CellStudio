@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use support::{Server, dev_dataset, data_copy, skip};
+use support::{Server, data_copy, dev_dataset, skip};
 
 const JOB_TIMEOUT: Duration = Duration::from_secs(120);
 

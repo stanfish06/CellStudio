@@ -1,17 +1,24 @@
-import { OrthographicView, type Layer, type PickingInfo } from '@deck.gl/core'
+import { COORDINATE_SYSTEM, OrthographicView, type Layer, type PickingInfo } from '@deck.gl/core'
+import { ScatterplotLayer } from '@deck.gl/layers'
 import { MultiscaleImageLayer } from '@hms-dbmi/viv'
-import type { CellRow, Dims, PlaneBuffer } from '@cellstudio/api-client'
+import type { CellRow, Dims, Level, PlaneBuffer } from '@cellstudio/api-client'
+import type { PixelApi } from '../data/api'
 import { GpuBudget, gpuBudget as defaultBudget } from '../data/gpuBudget'
 import { planeKeyId, type PlaneKey } from '../data/keys'
 import type { PlaneCache } from '../data/planeCache'
 import { DEFAULT_BRICK, LatestWins, nextBrickIndex, type BrickShape } from '../data/prefetch'
 import type { TrackSource } from '../data/trackSource'
+import { AXIS_SLOT } from '../edit/stamp'
+import type { LabelPlaneView, MaskEditor } from '../edit/maskEditor'
 import {
   fitSlice,
   makeWorldTransform,
+  pixelFromSliceWorld,
+  sliceAxes,
   sliceExtent,
   type Extent2D,
   type Fit,
+  type PixelZYX,
   type Viewport2D,
   type WorldTransform,
 } from '../data/world'
@@ -24,10 +31,11 @@ import {
   orthoPlaneProps,
 } from '../layers/orthoPlane'
 import { clampGamma } from '../layers/gamma'
+import { labelPlaneExtensions, labelPlaneProps } from '../layers/labelPalette'
 import { TrackLayer, type TrackPoint } from '../layers/tracks'
 import { vivLayer } from '../layers/viv'
 import type { PerfMonitor } from '../perf'
-import type { SliceOrientation } from '../state/nav'
+import { sliceAxis, type SliceOrientation } from '../state/nav'
 import { Emitter, levelForZoom, visibleChannels, type NavSnapshot, type SceneStatus } from './types'
 
 export interface SliceSceneOptions {
@@ -40,9 +48,15 @@ export interface SliceSceneOptions {
   /** Slab half-thickness for the track overlay, in pixels along the view normal. */
   slabRadius?: number
   id?: string
+  /** `/pixel` for label-voxel selection; the plane cache is not a point lookup. */
+  api?: PixelApi
+  /** Owns the label echo and whether a label store exists at all. */
+  editor?: MaskEditor
   /** Centroid pick; the session wires these to the nav store. */
   onSelect?: (cell: CellRow) => void
   onJumpToCell?: (cell: CellRow) => void
+  /** A label voxel resolved to a cell id, which is the voxel value (design D11). */
+  onSelectLabel?: (cellId: number) => void
 }
 
 interface Committed {
@@ -58,6 +72,20 @@ export interface SliceCamera {
 }
 
 const IDENTITY_UNIT = { z: 1, y: 1, x: 1 }
+
+/** No base contains no acknowledged operation, so the first stroke's echo survives. */
+const NO_BASE_VERSION = -1
+
+const CURSOR_COLOR: [number, number, number, number] = [255, 255, 255, 220]
+
+const levelDims = (levels: readonly Level[], level: number, fallback: Dims): Dims =>
+  levels.find((l) => l.index === level)?.dims ?? fallback
+
+/** Level downsample factor, `[z, y, x]` — the order `Dims` and centroids use. */
+const levelFactor = (levels: readonly Level[], level: number): PixelZYX => {
+  const [fz, fy, fx] = levels.find((l) => l.index === level)?.factor ?? [1, 1, 1]
+  return [fz ?? 1, fy ?? 1, fx ?? 1]
+}
 
 const sameCamera = (a: SliceCamera | null, b: SliceCamera | null): boolean =>
   a === b ||
@@ -82,9 +110,18 @@ export class SliceScene {
   private readonly budget: GpuBudget
   private readonly slabRadius: number
   private readonly extensions = orthoPlaneExtensions()
+  private readonly labelExtensions = labelPlaneExtensions()
   private readonly changed = new Emitter()
+  private readonly api?: PixelApi
+  private readonly editor?: MaskEditor
   private readonly onSelect?: (cell: CellRow) => void
   private readonly onJumpToCell?: (cell: CellRow) => void
+  private readonly onSelectLabel?: (cellId: number) => void
+  private labelCommitted: Committed | null = null
+  private labelLatest = new LatestWins()
+  private labelPending: string | null = null
+  private labelPick = new LatestWins()
+  private pointer: [number, number] | null = null
   private pyramid: XyPyramid | null = null
   private viewportSize: Viewport2D = { width: 1024, height: 1024 }
   private nav: NavSnapshot | null = null
@@ -98,6 +135,7 @@ export class SliceScene {
   private camera: SliceCamera | null = null
   private navCamera: SliceCamera | null = null
   private unsubscribeTracks?: () => void
+  private unsubscribeEditor?: () => void
 
   constructor(opts: SliceSceneOptions) {
     this.orientation = opts.orientation
@@ -108,8 +146,14 @@ export class SliceScene {
     this.brick = opts.brick ?? DEFAULT_BRICK
     this.budget = opts.budget ?? defaultBudget
     this.slabRadius = opts.slabRadius ?? 2
+    this.api = opts.api
+    this.editor = opts.editor
     this.onSelect = opts.onSelect
     this.onJumpToCell = opts.onJumpToCell
+    this.onSelectLabel = opts.onSelectLabel
+    if (this.editor) {
+      this.unsubscribeEditor = this.editor.onChange(() => this.changed.emit())
+    }
     if (this.tracksSource) {
       this.unsubscribeTracks = this.tracksSource.onChange(() => this.changed.emit())
     }
@@ -135,7 +179,29 @@ export class SliceScene {
    */
   setCamera(camera: SliceCamera | null): void {
     this.camera = camera
+    // Only `update(nav)` issues plane requests, so a zoom alone would leave the overlay at
+    // the last nav write's level. No `generation` bump: that would cancel the image fetch.
+    if (this.nav) this.requestLabelPlane(this.nav)
     this.changed.emit()
+  }
+
+  /** Pointer position on the slice quad in world units, for the brush cursor preview. */
+  setPointer(world: readonly [number, number] | null): void {
+    const same =
+      (world === null && this.pointer === null) ||
+      (world !== null &&
+        this.pointer !== null &&
+        world[0] === this.pointer[0] &&
+        world[1] === this.pointer[1])
+    if (same) return
+    this.pointer = world === null ? null : [world[0], world[1]]
+    this.changed.emit()
+  }
+
+  /** A world point on this quad in level-0 dataset pixels; the pinned axis is exact. */
+  pixelAt(world: readonly [number, number]): PixelZYX {
+    const index = this.nav?.slices[this.orientation].index ?? 0
+    return pixelFromSliceWorld(this.orientation, index, world, this.renderTransform)
   }
 
   get scrubDirection(): 1 | -1 {
@@ -176,6 +242,7 @@ export class SliceScene {
 
     if (this.orientation === 'xy') this.warmXyBrick(nav, project.dims)
     else this.requestPlane(nav)
+    this.requestLabelPlane(nav)
   }
 
   /** Deck view for this scene; the ui supplies the controller-driven view state. */
@@ -220,17 +287,23 @@ export class SliceScene {
     const out: Layer[] = []
     const image = this.orientation === 'xy' ? this.xyLayer(nav) : this.orthoLayer(nav)
     if (image) out.push(image)
+    const labels = this.labelLayer(nav)
+    if (labels) out.push(labels)
     const overlay = this.trackLayer(nav)
     if (overlay) out.push(overlay)
+    const cursor = this.cursorLayer(nav)
+    if (cursor) out.push(cursor)
     return out
   }
 
   /**
-   * Centroid picking on the track overlay. This is the centroid-only path — a detection
-   * with no label voxel is still selectable because deck's pick radius covers the marker.
-   * Selecting by label voxel goes through the readout's `labelId`, which is the cell id.
+   * A label voxel wins the pick, resolved through its own latest-wins `/pixel` — the
+   * readout's throttled sample is not a selection path. The centroid answer is what a
+   * caller gets synchronously, and a detection with no label voxel is still selectable
+   * because deck's pick radius covers the marker.
    */
   handlePick(info: PickingInfo, doubleClick = false): CellRow | null {
+    if (!doubleClick) this.pickLabel(info)
     const point = info.object as TrackPoint | undefined
     if (!point || typeof point.cellId !== 'number') return null
     const cell = this.tracksSource?.cell(point.cellId)
@@ -249,7 +322,12 @@ export class SliceScene {
   /** Drops everything the old backend session put here; the next update refetches. */
   reset(): void {
     this.latest.abort()
+    this.labelLatest.abort()
+    this.labelPick.abort()
     this.committed = null
+    this.labelCommitted = null
+    this.labelPending = null
+    this.pointer = null
     this.pendingToken = null
     this.pyramid = null
     this.nav = null
@@ -261,7 +339,10 @@ export class SliceScene {
 
   dispose(): void {
     this.latest.abort()
+    this.labelLatest.abort()
+    this.labelPick.abort()
     this.unsubscribeTracks?.()
+    this.unsubscribeEditor?.()
     this.changed.clear()
   }
 
@@ -318,6 +399,132 @@ export class SliceScene {
       })
     const axis = key.axis === 'xz' ? 'y' : 'x'
     this.planes.prefetch(key, this.direction, project.dims[axis] - 1)
+  }
+
+  /**
+   * The label plane for the current slice, at the zoom's level. `/slice` indexes in level
+   * coordinates while nav's index is level-0, and a coarse level point-samples level 0
+   * (design M8), so the two differ by the level factor.
+   */
+  private labelKey(nav: NavSnapshot): PlaneKey | null {
+    const project = nav.project
+    if (!project || !nav.overlays.labels.on || !this.editor?.labelsPresent) return null
+    const level = levelForZoom(this.fetchCamera(nav).zoom, project.levels)
+    const factor = levelFactor(project.levels, level)[AXIS_SLOT[sliceAxis(this.orientation)]]
+    return {
+      layer: 'labels',
+      axis: this.orientation,
+      level,
+      t: nav.t,
+      c: [0],
+      index: Math.floor(nav.slices[this.orientation].index / Math.max(1, factor)),
+      version: project.versions.labels,
+    }
+  }
+
+  private requestLabelPlane(nav: NavSnapshot): void {
+    const key = this.labelKey(nav)
+    const project = nav.project
+    if (!key || !project) return
+    const token = planeKeyId(key)
+    if (this.labelCommitted?.token === token || this.labelPending === token) return
+    this.labelPending = token
+    void this.labelLatest
+      .run(token, (signal) => this.planes.get(key, signal))
+      .then((plane) => {
+        if (!plane) return
+        this.labelPending = null
+        this.labelCommitted = { key, token, plane }
+        this.changed.emit()
+      })
+      .catch(() => {
+        this.labelPending = null
+      })
+    const axis = sliceAxis(this.orientation)
+    const dims = levelDims(project.levels, key.level, project.dims)
+    this.planes.prefetch(key, this.direction, dims[axis] - 1)
+  }
+
+  /** The committed base for this exact slice, ignoring the version a refetch is chasing. */
+  private labelBase(key: PlaneKey): Committed | null {
+    const committed = this.labelCommitted
+    if (!committed) return null
+    const b = committed.key
+    const same =
+      b.axis === key.axis && b.level === key.level && b.t === key.t && b.index === key.index
+    return same ? committed : null
+  }
+
+  private labelLayer(nav: NavSnapshot): Layer | null {
+    const project = nav.project
+    if (!project || !nav.overlays.labels.on) return null
+    const level = levelForZoom(this.fetchCamera(nav).zoom, project.levels)
+    const key = this.labelKey(nav)
+    const base = key ? this.labelBase(key) : null
+    const axes = sliceAxes(this.orientation)
+    const dims = levelDims(project.levels, base?.key.level ?? level, project.dims)
+    const view: LabelPlaneView = {
+      axis: sliceAxis(this.orientation),
+      index: nav.slices[this.orientation].index,
+      t: nav.t,
+      factor: levelFactor(project.levels, base?.key.level ?? level),
+      shape: base?.plane.shape ?? [dims[axes.vertical], dims[axes.horizontal]],
+      level: base?.key.level ?? level,
+      version: base?.key.version ?? NO_BASE_VERSION,
+    }
+    const plane = this.editor
+      ? this.editor.planeBuffer(view, base?.plane ?? null)
+      : (base?.plane ?? null)
+    if (!plane) return null
+    const extent = this.extent()
+    return vivLayer(OrthoPlaneLayer, {
+      ...labelPlaneProps({
+        id: `${this.id}-labels`,
+        plane,
+        bounds: [0, extent.height, extent.width, 0],
+        opacity: nav.overlays.labels.opacity,
+        selectedLabel: nav.selection?.cellId ?? 0,
+      }),
+      extensions: this.labelExtensions,
+    })
+  }
+
+  /** The stamp the next press would write, outlined in world units so it scales with zoom. */
+  private cursorLayer(nav: NavSnapshot): Layer | null {
+    const world = this.pointer
+    if (!world || (nav.tool !== 'brush' && nav.tool !== 'eraser')) return null
+    return new ScatterplotLayer({
+      id: `${this.id}-brush-cursor`,
+      data: [world],
+      coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
+      radiusUnits: 'common',
+      lineWidthUnits: 'pixels',
+      stroked: true,
+      filled: false,
+      pickable: false,
+      getPosition: (p: [number, number]) => p,
+      getRadius: nav.brush.radius,
+      getLineWidth: 1.5,
+      getLineColor: CURSOR_COLOR,
+      updateTriggers: { getRadius: [nav.brush.radius] },
+    }) as unknown as Layer
+  }
+
+  /** Latest-wins, so a burst of clicks selects what the last one pointed at. */
+  private pickLabel(info: PickingInfo): void {
+    const nav = this.nav
+    const api = this.api
+    const coordinate = info.coordinate
+    if (!nav || !coordinate || !api || !this.onSelectLabel || !this.editor?.labelsPresent) return
+    const px = this.pixelAt([coordinate[0] ?? 0, coordinate[1] ?? 0])
+    const [z, y, x] = [Math.floor(px[0]), Math.floor(px[1]), Math.floor(px[2])]
+    const token = `${nav.t}/${z}/${y}/${x}`
+    void this.labelPick
+      .run(token, (signal) => api.pixel({ layer: 'labels', t: nav.t, c: 0, z, y, x }, signal))
+      .then((id) => {
+        if (id) this.onSelectLabel?.(id)
+      })
+      .catch(() => {})
   }
 
   /**

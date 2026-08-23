@@ -300,3 +300,100 @@ describe('ViewerSession lifecycle', () => {
     vi.useRealTimers()
   })
 })
+
+describe('ViewerSession label version path', () => {
+  const project = devProject({ hasLabels: true })
+  const labelKey = (version: number, index = 512) => ({
+    layer: 'labels' as const,
+    axis: 'xz' as const,
+    level: 0,
+    t: 0,
+    c: [0],
+    index,
+    version,
+  })
+  const imageKey = {
+    layer: 'image' as const,
+    axis: 'xz' as const,
+    level: 0,
+    t: 0,
+    c: [0, 1, 2],
+    index: 512,
+    version: 1,
+  }
+  const opened = async (api: FakeApi) => {
+    const s = session(api)
+    s.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    return s
+  }
+  const fetched = (api: FakeApi, version: number) =>
+    api.sliceCalls.filter((c) => c.q.layer === 'labels' && c.q.pos === 512).length === version
+
+  it('fetches once whichever of the response and the event lands first', async () => {
+    const api = new FakeApi()
+    const s = await opened(api)
+    const at512 = () => api.sliceCalls.filter((c) => c.q.layer === 'labels' && c.q.pos === 512)
+    expect(at512()).toHaveLength(1)
+
+    expect(s.advanceLabels('session-1', 2)).toBe(true)
+    await settle()
+    expect(at512()).toHaveLength(2)
+    // The matching event arrives after the response, and does nothing.
+    expect(s.advanceLabels('session-1', 2)).toBe(false)
+    await settle()
+    expect(at512()).toHaveLength(2)
+    expect(fetched(api, 2)).toBe(true)
+    s.dispose()
+  })
+
+  it('ignores a version from another backend session', async () => {
+    const api = new FakeApi()
+    const s = await opened(api)
+    const before = api.sliceCalls.length
+    expect(s.advanceLabels('other-session', 9)).toBe(false)
+    await settle()
+    expect(api.sliceCalls).toHaveLength(before)
+    s.dispose()
+  })
+
+  it('drops label entries and leaves the image resident', async () => {
+    const api = new FakeApi()
+    const s = await opened(api)
+    expect(s.planes.has(labelKey(1))).toBe(true)
+    s.advanceLabels('session-1', 2)
+    await settle()
+    expect(s.planes.has(labelKey(1))).toBe(false)
+    expect(s.planes.has(labelKey(2))).toBe(true)
+    expect(s.planes.has(imageKey)).toBe(true)
+    s.dispose()
+  })
+
+  it("patches the response's cells into the overlay without a /cells fetch", async () => {
+    const api = new FakeApi()
+    const s = session(api)
+    // A frame whose trail window is already loaded, so no `ensure` re-reads over the patch.
+    s.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, t: 20 }))
+    await settle()
+    const before = api.cellCalls.length
+    s.advanceLabels('session-1', 3, [cell(77, 20, [1, 10, 20], 5)], [])
+    await settle()
+    expect(s.tracks.cell(77)?.trackId).toBe(5)
+    expect(api.cellCalls).toHaveLength(before)
+    s.advanceLabels('session-1', 4, [], [77])
+    expect(s.tracks.cell(77)).toBe(null)
+    s.dispose()
+  })
+
+  it('reserves a block of ids when a paint tool becomes active, and not before', async () => {
+    const api = new FakeApi()
+    const s = session(api)
+    s.update(navSnapshot(project, { activeView: 'xy' }))
+    await settle()
+    expect(api.reserveCalls).toHaveLength(0)
+    s.update(navSnapshot(project, { activeView: 'xy', tool: 'brush' }))
+    await settle()
+    expect(api.reserveCalls).toEqual([64])
+    s.dispose()
+  })
+})

@@ -183,7 +183,14 @@ pub fn cors() -> CorsLayer {
             Method::PUT,
             Method::OPTIONS,
         ])
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE, RANGE])
+        // the session header rides on every mutation, which makes it non-simple: without it
+        // here the browser blocks the request at the preflight
+        .allow_headers([
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            RANGE,
+            HeaderName::from_static(SESSION_HEADER),
+        ])
         .expose_headers(exposed)
         .max_age(Duration::from_secs(600))
 }

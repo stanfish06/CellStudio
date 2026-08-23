@@ -5,7 +5,7 @@ mod support;
 use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
-use support::{Server, dev_dataset, data_copy, skip};
+use support::{Server, data_copy, dev_dataset, skip};
 
 /// Enough callers that the decode pool is genuinely contended.
 const CALLERS: usize = 8;

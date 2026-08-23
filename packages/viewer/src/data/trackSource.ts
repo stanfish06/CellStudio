@@ -72,6 +72,20 @@ export class TrackSource {
       })
   }
 
+  /**
+   * Rows a mask edit changed, applied without a `/cells` round trip — the inspector and
+   * the track overlay would otherwise show the pre-stroke centroid and area (design M21).
+   */
+  patch(cells: readonly CellRow[], removed: readonly number[]): void {
+    if (cells.length === 0 && removed.length === 0) return
+    const byId = new Map(this.byId)
+    for (const id of removed) byId.delete(id)
+    for (const row of cells) byId.set(row.id, row)
+    this.byId = byId
+    this.rows = [...byId.values()]
+    for (const cb of this.listeners) cb()
+  }
+
   /** Forces the next `ensure` to refetch, keeping the current rows on screen meanwhile. */
   invalidate(): void {
     this.loaded = null

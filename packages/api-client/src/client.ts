@@ -23,19 +23,33 @@
 //   POST /import/{kind}     {"path": string}                    -> {"id": string}
 //   GET  /settings                                              -> opaque JSON object
 //   PUT  /settings          opaque JSON object                  -> 2xx, body ignored
+//   GET  /edits             ?limit                              -> EditEntry[]
+//   POST /mask/reserve      {"count": number}                   -> LabelLease
+//   POST /mask/stroke       StrokeBody                          -> MaskEditResult
+//   POST /mask/delete       DeleteMaskBody                      -> MaskEditResult
+//   POST /edits/undo        no body                             -> MaskEditResult
+//   POST /edits/redo        no body                             -> MaskEditResult
 //   GET  /ws-ticket                                             -> {"ticket": string}
+//
+// Mutations additionally send x-cellstudio-session with the session the client believes it
+// is addressing; the backend refuses a mismatch before it resolves a project or writes.
 
 import { z } from 'zod'
 import {
   CellRow,
   Dtype,
+  EditEntry,
   Histogram,
   JobState,
+  LabelLease,
   LineageTree,
+  MaskEditResult,
   ProjectInfo,
   type Bbox,
+  type DeleteMaskBody,
   type LayerId,
   type PlaneBuffer,
+  type StrokeBody,
   type VolumeBuffer,
 } from './schemas'
 
@@ -55,7 +69,7 @@ export type JobId = string
 
 export interface SliceQuery {
   layer: LayerId
-  axis: 'xz' | 'yz'
+  axis: 'xy' | 'xz' | 'yz'
   t: number
   cs: number[]
   pos: number
@@ -134,6 +148,14 @@ export class BufferTooLargeError extends Error {
   }
 }
 
+/** A mutation was attempted before any session-scoped response established the session. */
+export class NoSessionError extends Error {
+  constructor(readonly url: string) {
+    super(`no backend session yet: ${url}`)
+    this.name = 'NoSessionError'
+  }
+}
+
 export function isStaleSession(err: unknown): err is StaleSessionError {
   return err instanceof StaleSessionError
 }
@@ -153,6 +175,8 @@ interface RequestOptions {
   signal?: AbortSignal
   /** Take the response's session id as the client's own instead of comparing against it. */
   adoptSession?: boolean
+  /** Send the session id so the backend can refuse a stale mutation before it writes. */
+  fence?: boolean
 }
 
 /** One instance per backend session; every cache downstream of it dies with it. */
@@ -235,6 +259,31 @@ export class ApiClient {
     return this.#json(z.array(JobState), '/jobs')
   }
 
+  edits(limit = 100): Promise<EditEntry[]> {
+    return this.#json(z.array(EditEntry), '/edits', { query: { limit } })
+  }
+
+  /** A block of unused label ids, so a stroke on empty space can paint before it posts. */
+  reserveLabels(count: number): Promise<LabelLease> {
+    return this.#json(LabelLease, '/mask/reserve', { method: 'POST', body: { count }, fence: true })
+  }
+
+  stroke(body: StrokeBody): Promise<MaskEditResult> {
+    return this.#json(MaskEditResult, '/mask/stroke', { method: 'POST', body, fence: true })
+  }
+
+  deleteMask(body: DeleteMaskBody): Promise<MaskEditResult> {
+    return this.#json(MaskEditResult, '/mask/delete', { method: 'POST', body, fence: true })
+  }
+
+  undo(): Promise<MaskEditResult> {
+    return this.#json(MaskEditResult, '/edits/undo', { method: 'POST', fence: true })
+  }
+
+  redo(): Promise<MaskEditResult> {
+    return this.#json(MaskEditResult, '/edits/redo', { method: 'POST', fence: true })
+  }
+
   async startImport(kind: 'tracks' | 'labels', path: string): Promise<JobId> {
     const { id } = await this.#json(JobRef, `/import/${kind}`, { method: 'POST', body: { path } })
     return id
@@ -267,6 +316,10 @@ export class ApiClient {
   async #send(path: string, opts: RequestOptions = {}): Promise<{ res: Response; url: string }> {
     const url = this.#url(path, opts.query)
     const headers = new Headers({ authorization: `Bearer ${this.#token}` })
+    if (opts.fence) {
+      if (this.#sessionId === null) throw new NoSessionError(url)
+      headers.set(SESSION_HEADER, this.#sessionId)
+    }
     let body: string | undefined
     if (opts.body !== undefined) {
       headers.set('content-type', 'application/json')

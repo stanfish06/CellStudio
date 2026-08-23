@@ -67,11 +67,14 @@ pub async fn slice(
 ) -> ApiResult<Response> {
     let active = state.require()?;
     let axis = match query.axis.to_ascii_lowercase().as_str() {
+        // the image's XY tiles still come from /store, where viv's multiscale layer reads
+        // them; this path serves label planes and anything else assembled (design M15)
+        "xy" => OrthoAxis::XY,
         "xz" => OrthoAxis::XZ,
         "yz" => OrthoAxis::YZ,
         other => {
             return Err(ApiError::BadRequest(format!(
-                "axis must be xz or yz (xy tiles come from /store), got `{other}`"
+                "axis must be xy, xz or yz, got `{other}`"
             )));
         }
     };
@@ -80,9 +83,11 @@ pub async fn slice(
     let level = query.level.unwrap_or(0);
 
     let reader = active.image.clone();
+    let labels = active.coordinator.clone();
     let count = channels.len();
     let (bytes, shape, dtype) = state
         .read(move || {
+            let _labels = (layer == LayerId::Labels).then(|| labels.read_labels());
             let mut packed: Option<([u32; 2], Dtype, BytesMut)> = None;
             for c in channels {
                 let plane = reader.read_ortho_plane(layer, level, axis, query.t, c, query.pos)?;
@@ -123,8 +128,12 @@ pub async fn volume(
     let layer = query.layer.unwrap_or(LayerId::Image);
     let level = query.level.unwrap_or(0);
     let reader = active.image.clone();
+    let labels = active.coordinator.clone();
     let volume = state
-        .read(move || Ok(reader.read_volume(layer, level, query.t, query.c)?))
+        .read(move || {
+            let _labels = (layer == LayerId::Labels).then(|| labels.read_labels());
+            Ok(reader.read_volume(layer, level, query.t, query.c)?)
+        })
         .await?;
 
     let shape = format!(
@@ -152,8 +161,12 @@ pub async fn pixel(
     let active = state.require()?;
     let layer = query.layer.unwrap_or(LayerId::Image);
     let reader = active.image.clone();
+    let labels = active.coordinator.clone();
     let value = state
         .read(move || {
+            // a label read never sees a plane mixed from pre- and post-edit bricks; image
+            // reads stay lock-free, since nothing writes them (design M9)
+            let _labels = (layer == LayerId::Labels).then(|| labels.read_labels());
             Ok(reader.read_pixel(layer, query.t, query.c, [query.z, query.y, query.x])?)
         })
         .await?;

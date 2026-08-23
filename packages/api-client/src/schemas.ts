@@ -128,6 +128,7 @@ export const ServerEvent = z.discriminatedUnion('type', [
   z.object({ type: z.literal('job'), job: JobState }),
   z.object({
     type: z.literal('invalidate'),
+    sessionId: z.string(),
     layer: LayerId,
     chunks: z.array(z.string()),
     version: z.number().int().nonnegative(),
@@ -139,6 +140,63 @@ export const ServerEvent = z.discriminatedUnion('type', [
   }),
 ])
 export type ServerEvent = z.infer<typeof ServerEvent>
+
+export const EditDomain = z.enum(['mask', 'graph'])
+export type EditDomain = z.infer<typeof EditDomain>
+
+export const EditEntry = z.object({
+  seq: z.number().int(),
+  ts: z.string(),
+  domain: EditDomain,
+  scope: z.string().nullable(),
+  undone: z.boolean(),
+  /** False once the entry's chunk snapshots have been pruned past the retained window. */
+  undoable: z.boolean(),
+})
+export type EditEntry = z.infer<typeof EditEntry>
+
+/** Mask edits. `plane` pins one axis for a slice-view disk; null is a 3D orb. */
+export const MaskMode = z.enum(['paint', 'erase'])
+export type MaskMode = z.infer<typeof MaskMode>
+
+export const StampAxis = z.enum(['z', 'y', 'x'])
+export type StampAxis = z.infer<typeof StampAxis>
+
+export const StrokeBody = z.object({
+  t: z.number().int().nonnegative(),
+  label: u32,
+  mode: MaskMode,
+  /** Level-0 pixels along x; other axes scale by voxel size. */
+  radius: z.number().positive(),
+  plane: StampAxis.nullable(),
+  /** Stamp centres in level-0 pixels, [z, y, x], fractional. */
+  stamps: z.array(z.tuple([z.number(), z.number(), z.number()])).min(1),
+  /** Eraser scope: clear only this label, or any label when null. */
+  only: u32.nullable(),
+})
+export type StrokeBody = z.infer<typeof StrokeBody>
+
+export const DeleteMaskBody = z.object({
+  t: z.number().int().nonnegative(),
+  label: u32,
+})
+export type DeleteMaskBody = z.infer<typeof DeleteMaskBody>
+
+export const LabelLease = z.object({ first: u32, count: z.number().int().positive() })
+export type LabelLease = z.infer<typeof LabelLease>
+
+export const MaskEditResult = z.object({
+  seq: z.number().int().nonnegative(),
+  version: z.number().int().nonnegative(),
+  sessionId: z.string(),
+  hasLabels: z.boolean(),
+  /** Cells whose voxels changed, with recomputed centroid and area. */
+  cells: z.array(CellRow),
+  /** Cells that no longer exist on that frame — erased to nothing, or deleted. */
+  removed: z.array(u32),
+  chunks: z.array(z.string()),
+})
+export type MaskEditResult = z.infer<typeof MaskEditResult>
 
 export const Bbox = z.object({
   y0: z.number(),

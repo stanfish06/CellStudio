@@ -83,8 +83,8 @@
   position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 1px;
-  padding: 0 7px 12px 0;
+  gap: 2px;
+  padding: 0 9px 12px;
   border-right: 1px solid var(--line);
 }
 
@@ -94,8 +94,8 @@
 
 .ribbon-group-title {
   position: absolute;
-  left: 0;
-  right: 7px;
+  left: 9px;
+  right: 9px;
   bottom: 0;
   text-align: center;
   color: var(--faint);
@@ -107,7 +107,7 @@
 
 .ribbon-tool {
   position: relative;
-  width: 44px;
+  min-width: 44px;
   height: 33px;
   border: 1px solid transparent;
   border-radius: 2px;
@@ -117,7 +117,7 @@
   grid-template-rows: 18px 11px;
   align-items: center;
   justify-items: center;
-  padding: 2px;
+  padding: 2px 6px;
 }
 
 .ribbon-tool:hover:not(:disabled) {
@@ -147,12 +147,62 @@
   white-space: nowrap;
 }
 
+/* Anchored beside the icon, not the button edge: the button widens with its label, and a
+   badge pinned right would drift away from the glyph it belongs to. */
 .ribbon-tool .key {
   position: absolute;
-  right: 2px;
+  left: 50%;
+  margin-left: 8px;
   top: 2px;
   font: 7px/1 var(--mono);
   color: var(--faint);
+}
+
+/* Reserved for every tool and disabled outside the paint tools, so the ribbon keeps its
+   geometry as the tool changes. */
+.ribbon-field {
+  width: 124px;
+  height: 33px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: 18px 11px;
+  align-items: center;
+  column-gap: 5px;
+  padding: 2px 0;
+  margin-left: 10px;
+}
+
+.ribbon-field label {
+  font-size: 9px;
+  color: #dedede;
+}
+
+.ribbon-field.disabled label {
+  color: var(--faint);
+}
+
+.ribbon-field input[type='number'] {
+  width: 100%;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #232528;
+  color: #e6edf3;
+  text-align: right;
+  padding: 0 3px;
+  font: 10px var(--mono);
+}
+
+.ribbon-field input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--focus);
+}
+
+.ribbon-field input:disabled {
+  opacity: 0.45;
 }
 
 .workspace {
@@ -165,7 +215,7 @@
   border-top: 1px solid var(--line);
   background: #25272a;
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   gap: 14px;
   padding: 0 8px;
   color: #c7c7c7;
@@ -188,6 +238,7 @@
 }
 
 .job-status,
+.write-status,
 .backend-status {
   display: flex;
   align-items: center;
@@ -195,7 +246,12 @@
   color: #b7c1cb;
 }
 
+.write-status.failed {
+  color: var(--danger);
+}
+
 .job-status .dot,
+.write-status .dot,
 .backend-status .dot {
   width: 6px;
   height: 6px;
@@ -257,6 +313,10 @@
     grid-template-columns: minmax(420px, 1fr);
   }
   .ribbon-tool {
-    width: 40px;
+    min-width: 40px;
+    padding: 2px 4px;
+  }
+  .ribbon-field {
+    width: 104px;
   }
 }

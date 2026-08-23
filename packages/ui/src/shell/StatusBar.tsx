@@ -25,9 +25,21 @@ export interface StatusBarProps {
   backend: BackendState
   jobs: readonly JobState[]
   perf: PerfSample | null
+  /** Edits posted but not yet acknowledged (`ProjectStatus.pendingWrites`). */
+  pendingWrites: number
+  /** Most recent failure to reach the user; a later success clears it. */
+  error?: string | null
 }
 
-export function StatusBar({ cursor, activeChannel, backend, jobs, perf }: StatusBarProps) {
+export function StatusBar({
+  cursor,
+  activeChannel,
+  backend,
+  jobs,
+  perf,
+  pendingWrites,
+  error = null,
+}: StatusBarProps) {
   const job = activeJob(jobs)
   return (
     <footer className="statusbar">
@@ -76,6 +88,24 @@ export function StatusBar({ cursor, activeChannel, backend, jobs, perf }: Status
           <>
             <i className="dot" />
             No background jobs
+          </>
+        )}
+      </span>
+      <span className={error ? 'write-status failed' : 'write-status'} title={error ?? undefined}>
+        {error ? (
+          <>
+            <i className="dot down" />
+            {error}
+          </>
+        ) : pendingWrites > 0 ? (
+          <>
+            <i className="dot progress" />
+            {pendingWrites} pending {pendingWrites === 1 ? 'write' : 'writes'}
+          </>
+        ) : (
+          <>
+            <i className="dot" />
+            No pending writes
           </>
         )}
       </span>

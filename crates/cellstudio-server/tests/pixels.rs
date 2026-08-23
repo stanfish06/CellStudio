@@ -4,7 +4,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use support::{Binary, Server, dev_dataset, data_copy, skip};
+use support::{Binary, Server, data_copy, dev_dataset, skip};
 
 const JOB_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -168,7 +168,8 @@ fn a_slice_request_the_reader_cannot_serve_is_a_client_error() {
     let (server, _dataset) = tiny(&dir);
 
     for (query, status) in [
-        ("/slice?axis=xy&t=0&cs=0&pos=0", 400), // XY tiles come from /store
+        ("/slice?axis=zz&t=0&cs=0&pos=0", 400),
+        ("/slice?axis=xy&t=0&cs=0&pos=99", 400), // xy is served now; the index still is not
         ("/slice?axis=xz&t=0&cs=&pos=0", 400),
         ("/slice?axis=xz&t=0&cs=a&pos=0", 400),
         ("/slice?axis=xz&t=99&cs=0&pos=0", 400),

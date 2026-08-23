@@ -1,4 +1,4 @@
-export type { OrthoAxis, PixelApi } from './api'
+export type { MaskApi, OrthoAxis, PixelApi } from './api'
 export { GPU_BYTES_PER_SAMPLE, GpuBudget, dtypeBytes, gpuBudget } from './gpuBudget'
 export type { GpuBudgetOptions, VolumePlan } from './gpuBudget'
 export { planeKeyId, samePlaneKey, sameVolumeKey, staleOf, volumeKeyId } from './keys'
@@ -31,6 +31,7 @@ export {
   sliceWorldFromPixel,
   toWorld,
   volumeExtent,
+  volumeFrame,
 } from './world'
 export type { Extent2D, Fit, PixelZYX, Viewport2D, WorldTransform, WorldXYZ } from './world'
 export { loadXyPyramid, versionedStore, xySelections } from './xySource'

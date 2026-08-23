@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::project::DbError;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 const TABLES_V1: &str = r#"
 CREATE TABLE cells (
@@ -53,6 +53,34 @@ CREATE TABLE edit_blobs (           -- pre-edit chunk snapshots for mask undo
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 "#;
 
+/// v1 → v2, and the tail of a fresh create, so both paths land on one schema.
+const TABLES_V2: &str = r#"
+CREATE TABLE mask_extent (         -- per (t, label): conservative bbox, exact area and sums
+  t INTEGER NOT NULL,
+  label INTEGER NOT NULL,
+  z0 INTEGER, z1 INTEGER, y0 INTEGER, y1 INTEGER, x0 INTEGER, x1 INTEGER,
+  area INTEGER NOT NULL,
+  sum_z REAL NOT NULL, sum_y REAL NOT NULL, sum_x REAL NOT NULL,
+  PRIMARY KEY (t, label)
+);
+
+ALTER TABLE edits ADD COLUMN pending INTEGER NOT NULL DEFAULT 0;
+
+-- rebuild: `before` becomes nullable beside `existed`, because the inverse of a chunk that
+-- was absent is an erase, not a write of encoded zeros
+CREATE TABLE edit_blobs_v2 (
+  seq INTEGER NOT NULL,
+  chunk_key TEXT NOT NULL,
+  existed INTEGER NOT NULL,        -- 0: no object at this key before the edit
+  before BLOB                      -- zstd-compressed; NULL exactly when existed = 0
+);
+INSERT INTO edit_blobs_v2(seq, chunk_key, existed, before)
+  SELECT seq, chunk_key, 1, before FROM edit_blobs;
+DROP TABLE edit_blobs;
+ALTER TABLE edit_blobs_v2 RENAME TO edit_blobs;
+CREATE INDEX edit_blobs_by_seq ON edit_blobs(seq);
+"#;
+
 const SEED_META: &str = r#"
 INSERT OR IGNORE INTO meta(key, value) VALUES
   ('version.image', '0'),
@@ -64,8 +92,13 @@ INSERT OR IGNORE INTO meta(key, value) VALUES
 
 pub fn migrate(conn: &Connection) -> Result<(), DbError> {
     let found: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    match found {
-        0 => {}
+    let statements = match found {
+        0 => format!(
+            "{TABLES_V1}{}{SEED_META}{TABLES_V2}",
+            crate::import::STAGING_TABLES
+        ),
+        // a project already at 1 keeps its rows: v2 only adds tables and columns
+        1 => TABLES_V2.to_string(),
         v if v == SCHEMA_VERSION => return Ok(()),
         found => {
             return Err(DbError::SchemaVersion {
@@ -73,13 +106,10 @@ pub fn migrate(conn: &Connection) -> Result<(), DbError> {
                 supported: SCHEMA_VERSION,
             });
         }
-    }
+    };
 
     conn.execute_batch(&format!(
-        "BEGIN;{}{}{}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;",
-        TABLES_V1,
-        crate::import::STAGING_TABLES,
-        SEED_META,
+        "BEGIN;{statements}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
     ))?;
     Ok(())
 }

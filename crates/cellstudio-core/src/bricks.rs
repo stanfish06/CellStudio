@@ -105,27 +105,31 @@ struct Resident {
     bytes: usize,
 }
 
+/// How a decode ended: `None` means it was invalidated mid-flight, so its bytes predate
+/// a write and a waiter retries instead of receiving them.
+type Settled = Option<Result<Arc<Brick>, String>>;
+
 /// A decode another thread is running; waiters block on `ready`.
 #[derive(Default)]
 struct Pending {
     ready: Condvar,
-    slot: Mutex<Option<Result<Arc<Brick>, String>>>,
+    slot: Mutex<Option<Settled>>,
 }
 
 impl Pending {
-    fn wait(&self) -> Result<Arc<Brick>, ReadError> {
+    fn wait(&self) -> Option<Result<Arc<Brick>, ReadError>> {
         let mut slot = self.slot.lock();
-        let result = loop {
-            if let Some(result) = slot.as_ref() {
-                break result.clone();
+        let settled = loop {
+            if let Some(settled) = slot.as_ref() {
+                break settled.clone();
             }
             self.ready.wait(&mut slot);
         };
-        result.map_err(ReadError::Decode)
+        settled.map(|result| result.map_err(ReadError::Decode))
     }
 
-    fn publish(&self, result: Result<Arc<Brick>, String>) {
-        *self.slot.lock() = Some(result);
+    fn publish(&self, settled: Settled) {
+        *self.slot.lock() = Some(settled);
         self.ready.notify_all();
     }
 }
@@ -134,6 +138,8 @@ pub struct BrickCache {
     capacity_bytes: usize,
     resident: Mutex<Resident>,
     inflight: Mutex<HashMap<BrickKey, Arc<Pending>>>,
+    /// Bumped by `invalidate`; absent means 0. Only edited keys ever get an entry.
+    epochs: Mutex<HashMap<BrickKey, u64>>,
     layers: RwLock<HashMap<LayerId, Arc<Dataset>>>,
     counters: Counters,
     codec_options: CodecOptions,
@@ -156,6 +162,7 @@ impl BrickCache {
                 bytes: 0,
             }),
             inflight: Mutex::new(HashMap::new()),
+            epochs: Mutex::new(HashMap::new()),
             layers: RwLock::new(HashMap::new()),
             counters: Counters::default(),
             codec_options: CodecOptions::default().with_concurrent_target(1),
@@ -190,6 +197,19 @@ impl BrickCache {
         resident.bytes = 0;
     }
 
+    /// Drop the resident bricks for `keys` and bump their epochs, so a decode that
+    /// already read pre-edit bytes cannot publish into the cache after the write.
+    pub fn invalidate(&self, keys: &[BrickKey]) {
+        let mut epochs = self.epochs.lock();
+        let mut resident = self.resident.lock();
+        for key in keys {
+            *epochs.entry(*key).or_default() += 1;
+            if let Some(evicted) = resident.lru.pop(key) {
+                resident.bytes = resident.bytes.saturating_sub(evicted.len_bytes());
+            }
+        }
+    }
+
     /// Brick-grid extent of a level, `[z, y, x]`.
     pub fn grid_shape(dims: Dims, chunks: Dims) -> [u64; 3] {
         [
@@ -200,25 +220,31 @@ impl BrickCache {
     }
 
     pub fn get(&self, key: BrickKey) -> Result<Arc<Brick>, ReadError> {
-        match self.claim(&key) {
-            Claim::Resident(brick) => {
-                self.counters.hits.fetch_add(1, Ordering::Relaxed);
-                Ok(brick)
-            }
-            Claim::Waiting(pending) => {
-                self.counters.coalesced.fetch_add(1, Ordering::Relaxed);
-                pending.wait()
-            }
-            Claim::Owner(pending) => {
-                self.counters.misses.fetch_add(1, Ordering::Relaxed);
-                let mut guard = Publisher {
-                    cache: self,
-                    key,
-                    pending,
-                    done: false,
-                };
-                let decoded = self.decode(&key);
-                guard.settle(decoded)
+        loop {
+            match self.claim(&key) {
+                Claim::Resident(brick) => {
+                    self.counters.hits.fetch_add(1, Ordering::Relaxed);
+                    return Ok(brick);
+                }
+                Claim::Waiting(pending) => {
+                    self.counters.coalesced.fetch_add(1, Ordering::Relaxed);
+                    // `None` is an invalidated decode: claim again and read post-edit.
+                    if let Some(result) = pending.wait() {
+                        return result;
+                    }
+                }
+                Claim::Owner(pending, epoch) => {
+                    self.counters.misses.fetch_add(1, Ordering::Relaxed);
+                    let mut guard = Publisher {
+                        cache: self,
+                        key,
+                        epoch,
+                        pending,
+                        done: false,
+                    };
+                    let decoded = self.decode(&key);
+                    return guard.settle(decoded);
+                }
             }
         }
     }
@@ -244,6 +270,7 @@ impl BrickCache {
 
     fn claim(&self, key: &BrickKey) -> Claim {
         let mut inflight = self.inflight.lock();
+        let epoch = self.epochs.lock().get(key).copied().unwrap_or_default();
         if let Some(brick) = self.resident.lock().lru.get(key).cloned() {
             return Claim::Resident(brick);
         }
@@ -252,9 +279,13 @@ impl BrickCache {
             None => {
                 let pending = Arc::new(Pending::default());
                 inflight.insert(*key, pending.clone());
-                Claim::Owner(pending)
+                Claim::Owner(pending, epoch)
             }
         }
+    }
+
+    fn epoch(&self, key: &BrickKey) -> u64 {
+        self.epochs.lock().get(key).copied().unwrap_or_default()
     }
 
     fn insert(&self, brick: Arc<Brick>) {
@@ -343,39 +374,46 @@ fn bounds_check(axis: Axis, index: u64, extent: u64) -> Result<(), ReadError> {
 enum Claim {
     Resident(Arc<Brick>),
     Waiting(Arc<Pending>),
-    Owner(Arc<Pending>),
+    /// The decode's owner, with the key's epoch as it stood when the claim was taken.
+    Owner(Arc<Pending>, u64),
 }
 
 struct Publisher<'a> {
     cache: &'a BrickCache,
     key: BrickKey,
+    epoch: u64,
     pending: Arc<Pending>,
     done: bool,
 }
 
 impl Publisher<'_> {
+    /// A brick decoded across an `invalidate` is returned to the caller that asked for
+    /// it — its read predates the write — but is neither cached nor handed to waiters
+    /// that claimed after the write.
     fn settle(&mut self, result: Result<Arc<Brick>, ReadError>) -> Result<Arc<Brick>, ReadError> {
+        let stale = self.cache.epoch(&self.key) != self.epoch;
         match &result {
+            Ok(_) if stale => self.release(None),
             Ok(brick) => {
                 self.cache.insert(brick.clone());
-                self.release(Ok(brick.clone()));
+                self.release(Some(Ok(brick.clone())));
             }
-            Err(e) => self.release(Err(e.to_string())),
+            Err(e) => self.release(Some(Err(e.to_string()))),
         }
         result
     }
 
-    fn release(&mut self, result: Result<Arc<Brick>, String>) {
+    fn release(&mut self, settled: Settled) {
         self.done = true;
         self.cache.inflight.lock().remove(&self.key);
-        self.pending.publish(result);
+        self.pending.publish(settled);
     }
 }
 
 impl Drop for Publisher<'_> {
     fn drop(&mut self) {
         if !self.done {
-            self.release(Err("brick decode panicked".to_string()));
+            self.release(Some(Err("brick decode panicked".to_string())));
         }
     }
 }

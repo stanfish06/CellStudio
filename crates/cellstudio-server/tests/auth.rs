@@ -161,6 +161,35 @@ fn the_cors_preflight_for_authorization_succeeds() {
     }
 }
 
+/// Mask edits send the session id as a request header, which makes them non-simple: the
+/// browser blocks them at the preflight unless the server allows that header by name.
+#[test]
+fn the_cors_preflight_allows_the_session_header_a_mutation_sends() {
+    let server = Server::without_proxy();
+    let response = server
+        .client()
+        .request(Method::OPTIONS, server.url("/mask/stroke"))
+        .header(ORIGIN, "http://localhost:5173")
+        .header("access-control-request-method", "POST")
+        .header(
+            "access-control-request-headers",
+            "authorization,content-type,x-cellstudio-session",
+        )
+        .send()
+        .expect("preflight");
+    assert!(response.status().is_success(), "{}", response.status());
+    let allowed = response
+        .headers()
+        .get(ACCESS_CONTROL_ALLOW_HEADERS)
+        .and_then(|value| value.to_str().ok())
+        .expect("preflight is missing access-control-allow-headers")
+        .to_ascii_lowercase();
+    assert!(
+        allowed.contains("x-cellstudio-session"),
+        "every mask edit is blocked in a browser without this: {allowed}"
+    );
+}
+
 /// A browser hides every response header the server does not expose, so the binary
 /// contract dies silently without these. They ride on the real response, not the preflight.
 #[test]

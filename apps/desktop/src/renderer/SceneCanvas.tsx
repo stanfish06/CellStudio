@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import DeckGL from '@deck.gl/react'
+import DeckGL, { type DeckGLRef } from '@deck.gl/react'
 import { OrthographicView, type OrbitViewState, type PickingInfo } from '@deck.gl/core'
-import { fromWorld, useNav, type ViewerSession } from '@cellstudio/viewer'
+import { fromWorld, useNav, type ViewerSession, type WorldXYZ } from '@cellstudio/viewer'
+import { paintInput, type PaintHandlers } from './paintInput'
 
 const ORTHO = new OrthographicView({ id: 'slice', flipY: true })
+
+/** Capture phase, and cancellable: React's synthetic capture fires at the root, while
+ * mjolnir listens natively on the deck canvas below this element (design M13). */
+const CAPTURE: AddEventListenerOptions = { capture: true, passive: false }
 
 const orbitTarget = (state: OrbitViewState): readonly number[] =>
   Array.isArray(state.target) ? state.target : [0, 0, 0]
@@ -28,6 +33,7 @@ export const isModified = (event: unknown): boolean => {
 
 export function SceneCanvas({ session }: { session: ViewerSession | null }) {
   const host = useRef<HTMLDivElement | null>(null)
+  const deck = useRef<DeckGLRef | null>(null)
   const activeView = useNav((s) => s.activeView)
   const t = useNav((s) => s.t)
   const slices = useNav((s) => s.slices)
@@ -41,6 +47,25 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
     return session.onChange(() => setTick((n) => n + 1))
   }, [session])
 
+  const paint = useMemo<PaintHandlers | null>(() => {
+    if (!session) return null
+    return paintInput({
+      session,
+      nav: () => useNav.getState(),
+      unproject: (clientX, clientY, depth) => {
+        const box = host.current?.getBoundingClientRect()
+        const viewport = deck.current?.deck?.getViewports()[0]
+        if (!box || !viewport) return null
+        const point = viewport.unproject([clientX - box.left, clientY - box.top, depth ?? 0])
+        return [point[0] ?? 0, point[1] ?? 0, point[2] ?? 0] as WorldXYZ
+      },
+      setCapture: (id) => host.current?.setPointerCapture(id),
+      releaseCapture: (id) => {
+        if (host.current?.hasPointerCapture(id)) host.current.releasePointerCapture(id)
+      },
+    })
+  }, [session])
+
   useEffect(() => {
     const el = host.current
     if (!el || !session) return
@@ -52,11 +77,13 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
         session.slices[orientation].setViewport(viewport)
       }
       session.volumeScene.setViewport(viewport)
+      // The ray depends on the projection, so a resize moves the orb's interval.
+      paint?.refresh()
       setTick((n) => n + 1)
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [session])
+  }, [session, paint])
 
   const scene = session?.scene(activeView) ?? null
   const is3d = activeView === '3d'
@@ -80,7 +107,47 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
   }, [scene, tick, t, slices, axisScale, volumeCamera])
 
   const activeChannel = useNav((s) => s.activeChannel)
+  const tool = useNav((s) => s.tool)
   const sliceIndex = slices[activeView === '3d' ? 'xy' : activeView].index
+
+  useEffect(() => {
+    const el = host.current
+    if (!el || !paint) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') paint.cancel()
+    }
+    el.addEventListener('pointerdown', paint.pointerdown, CAPTURE)
+    el.addEventListener('pointermove', paint.pointermove, CAPTURE)
+    el.addEventListener('pointerup', paint.pointerup, CAPTURE)
+    el.addEventListener('pointercancel', paint.pointercancel, CAPTURE)
+    el.addEventListener('lostpointercapture', paint.pointercancel, CAPTURE)
+    el.addEventListener('pointerleave', paint.pointerleave, CAPTURE)
+    el.addEventListener('wheel', paint.wheel, CAPTURE)
+    window.addEventListener('blur', paint.cancel)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      el.removeEventListener('pointerdown', paint.pointerdown, CAPTURE)
+      el.removeEventListener('pointermove', paint.pointermove, CAPTURE)
+      el.removeEventListener('pointerup', paint.pointerup, CAPTURE)
+      el.removeEventListener('pointercancel', paint.pointercancel, CAPTURE)
+      el.removeEventListener('lostpointercapture', paint.pointercancel, CAPTURE)
+      el.removeEventListener('pointerleave', paint.pointerleave, CAPTURE)
+      el.removeEventListener('wheel', paint.wheel, CAPTURE)
+      window.removeEventListener('blur', paint.cancel)
+      window.removeEventListener('keydown', onKeyDown)
+      paint.cancel()
+    }
+  }, [paint])
+
+  // A stroke is bound to one frame, tool and view; any of them moving ends it (design M4).
+  useEffect(() => {
+    paint?.cancel()
+  }, [paint, t, tool, activeView, sliceIndex])
+
+  // The orb keeps its relative depth when the view moves, so the interval is recomputed.
+  useEffect(() => {
+    paint?.refresh()
+  }, [paint, volumeCamera, axisScale, activeView])
 
   const onHover = useCallback(
     (info: PickingInfo) => {
@@ -111,6 +178,7 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
     >
       {session && scene ? (
         <DeckGL
+          ref={deck}
           views={views}
           viewState={{ ...viewState }}
           controller={is3d ? undefined : true}

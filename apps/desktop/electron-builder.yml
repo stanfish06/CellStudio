@@ -5,14 +5,12 @@ directories:
   buildResources: build
 files:
   - out/**
-# The Rust sidecar ships alongside the app; main spawns it from resources at runtime.
 extraResources:
   - from: ../../target/release/cellstudio-server
     to: bin/cellstudio-server
 mac:
   category: public.app-category.medical
   target: dmg
-  # Signing and notarization land with the packaging/CI change.
   identity: null
 win:
   target: nsis

@@ -56,6 +56,13 @@ export const TOOL_ICONS: Record<Tool, () => ReactElement> = {
   ),
 }
 
+export const DeleteMaskIcon = () => (
+  <svg {...box}>
+    <path d="M4 7h16M10 7V5h4v2M6.5 7l1 13h9l1-13" />
+    <path d="M10 11v5M14 11v5" />
+  </svg>
+)
+
 export const ResetViewIcon = () => (
   <svg {...box}>
     <path d="M19 12a7 7 0 11-2.05-4.95M17 3v4h-4" />

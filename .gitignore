@@ -5,9 +5,6 @@ openspec
 *.ims
 .data/
 
-# frontend prototypes
-index.html
-
 # build output
 node_modules/
 target/

@@ -8,7 +8,7 @@ use std::time::Duration;
 use reqwest::header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE};
 use serde_json::json;
 
-use support::{Server, dev_dataset, data_copy, skip, store_snapshot};
+use support::{Server, data_copy, dev_dataset, skip, store_snapshot};
 
 /// A re-chunk of a KB-sized data; generous enough to survive a loaded machine.
 const JOB_TIMEOUT: Duration = Duration::from_secs(120);

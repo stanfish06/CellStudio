@@ -4,6 +4,7 @@ import {
   RESET_VIEW_KEY,
   SHORTCUTS,
   TOOL_KEYS,
+  isPaintTool,
   isToolEnabled,
   isTypingTarget,
   resolveKey,
@@ -40,12 +41,43 @@ describe('resolveKey', () => {
     }
   })
 
-  it('resolves editing tools but reports them as not enabled', () => {
+  it('enables the paint tools and leaves the unshipped ones disabled', () => {
     expect(resolveKey({ key: 'B' })).toEqual({ kind: 'tool', tool: 'brush' })
-    expect(isToolEnabled('brush')).toBe(false)
+    expect(isToolEnabled('brush')).toBe(true)
+    expect(isToolEnabled('eraser')).toBe(true)
+    expect(isToolEnabled('fill')).toBe(false)
     expect(isToolEnabled('cut')).toBe(false)
     expect(isToolEnabled('pointer')).toBe(true)
-    expect(isToolEnabled('pan')).toBe(true)
+    expect(isPaintTool('brush')).toBe(true)
+    expect(isPaintTool('eraser')).toBe(true)
+    expect(isPaintTool('pointer')).toBe(false)
+  })
+
+  it('adjusts the brush radius on both spellings of - and =', () => {
+    expect(resolveKey({ key: '-' })).toEqual({ kind: 'brushRadius', delta: -1 })
+    expect(resolveKey({ key: '=' })).toEqual({ kind: 'brushRadius', delta: 1 })
+    expect(resolveKey({ key: '_', shiftKey: true })).toEqual({
+      kind: 'brushRadius',
+      delta: -LARGE_STEP,
+    })
+    expect(resolveKey({ key: '+', shiftKey: true })).toEqual({
+      kind: 'brushRadius',
+      delta: LARGE_STEP,
+    })
+  })
+
+  it('deletes the selected mask on Delete and Backspace', () => {
+    expect(resolveKey({ key: 'Delete' })).toEqual({ kind: 'deleteMask' })
+    expect(resolveKey({ key: 'Backspace' })).toEqual({ kind: 'deleteMask' })
+  })
+
+  it('resolves undo and redo on either accelerator, and only unaltered', () => {
+    expect(resolveKey({ key: 'z', ctrlKey: true })).toEqual({ kind: 'undo' })
+    expect(resolveKey({ key: 'Z', metaKey: true })).toEqual({ kind: 'undo' })
+    expect(resolveKey({ key: 'z', metaKey: true, shiftKey: true })).toEqual({ kind: 'redo' })
+    expect(resolveKey({ key: 'Z', ctrlKey: true, shiftKey: true })).toEqual({ kind: 'redo' })
+    expect(resolveKey({ key: 'z', ctrlKey: true, altKey: true })).toBeNull()
+    expect(resolveKey({ key: 'z' })).toBeNull()
   })
 
   it('resets the view on either case of the reset key', () => {
@@ -135,5 +167,22 @@ describe('SHORTCUTS', () => {
         expect(resolveKey({ key }), `${row.action} (${key})`).not.toBeNull()
       }
     }
+  })
+
+  it('advertises the mask edit bindings, including the pointer gestures', () => {
+    const row = (action: string) => SHORTCUTS.find((s) => s.action === action)
+    expect(row('Brush radius down / up')?.keys).toBe('- / =')
+    expect(row('Brush radius (over the view)')?.keys).toBe('Shift+wheel')
+    expect(row('Pan or orbit while painting')?.keys).toBe('Alt+drag')
+    expect(row('Delete selected mask')?.keys).toBe('Del / Backspace')
+    expect(row('Undo')?.keys).toBe('Ctrl/Cmd+Z')
+    expect(row('Redo')?.keys).toBe('Ctrl/Cmd+Shift+Z')
+  })
+
+  it('resolves the named keys it advertises', () => {
+    expect(resolveKey({ key: 'Delete' })).toEqual({ kind: 'deleteMask' })
+    expect(resolveKey({ key: 'Backspace' })).toEqual({ kind: 'deleteMask' })
+    expect(resolveKey({ key: 'z', ctrlKey: true })).toEqual({ kind: 'undo' })
+    expect(resolveKey({ key: 'z', metaKey: true, shiftKey: true })).toEqual({ kind: 'redo' })
   })
 })

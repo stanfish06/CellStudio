@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod edit;
 pub mod error;
 pub mod events;
 pub mod jobs;

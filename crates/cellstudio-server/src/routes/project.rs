@@ -6,16 +6,18 @@ use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, http::HeaderName};
+use cellstudio_core::labels;
 use cellstudio_core::reader::ImageReader;
 use cellstudio_core::{LayerId, dataset::Dataset};
-use cellstudio_db::Project;
 use cellstudio_db::queries::VersionCounter;
+use cellstudio_db::{DbError, Project};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::auth::json_body;
+use crate::edit::ProjectEditCoordinator;
 use crate::error::{ApiError, ApiResult};
-use crate::events::Event;
+use crate::events::{Event, EventBus};
 use crate::routes::io;
 use crate::state::{ActiveProject, AppState, assembled_layer, layout_of};
 use crate::wire::{
@@ -52,26 +54,20 @@ pub async fn open_project(
     body: Result<Json<OpenBody>, JsonRejection>,
 ) -> ApiResult<Response> {
     let path = PathBuf::from(json_body(body)?.path);
+    // the coordinator comes with it: both wrappers address one labels.zarr (design M20)
     let reopening = state
         .current()
-        .filter(|active| same_store(&active.source, &path))
-        .map(|active| {
-            (
-                active.project.clone(),
-                active.image.clone(),
-                active.assembled_root.clone(),
-                active.layout.clone(),
-            )
-        });
+        .filter(|active| same_store(&active.source, &path));
 
     let active = match reopening {
-        Some((project, image, assembled_root, layout)) => Arc::new(ActiveProject {
+        Some(previous) => Arc::new(ActiveProject {
             session_id: new_session_id(),
-            image,
-            project,
+            image: previous.image.clone(),
+            project: previous.project.clone(),
+            coordinator: previous.coordinator.clone(),
             source: path,
-            assembled_root,
-            layout,
+            assembled_root: previous.assembled_root.clone(),
+            layout: previous.layout.clone(),
         }),
         None => {
             let layout = state
@@ -82,16 +78,18 @@ pub async fn open_project(
                 .await?;
             drop(state.take());
             let cache_bytes = state.config.brick_cache_bytes;
+            let events = state.events.clone();
             let opened = state
                 .read({
                     let path = path.clone();
-                    move || open_validated(&path, cache_bytes, layout)
+                    move || open_validated(&path, cache_bytes, layout, events)
                 })
                 .await?;
             Arc::new(ActiveProject {
                 session_id: new_session_id(),
                 image: opened.image,
                 project: opened.project,
+                coordinator: opened.coordinator,
                 source: path,
                 assembled_root: opened.assembled_root,
                 layout: opened.layout,
@@ -114,42 +112,74 @@ pub async fn open_project(
 struct Opened {
     project: Arc<Project>,
     image: Arc<ImageReader>,
+    coordinator: Arc<ProjectEditCoordinator>,
     assembled_root: PathBuf,
     layout: cellstudio_core::dataset::LayoutReport,
 }
 
 fn validate_dataset(path: &std::path::Path) -> ApiResult<cellstudio_core::LayoutReport> {
     let source = cellstudio_core::open(path)?;
-    Ok(layout_of(&source)?)
+    layout_of(&source)
 }
 
 fn open_validated(
     path: &std::path::Path,
     cache_bytes: usize,
     layout: cellstudio_core::LayoutReport,
+    events: EventBus,
 ) -> ApiResult<Opened> {
     let project = Arc::new(Project::create_or_open(path)?);
     let (assembled_root, dataset) = assembled_layer(&project, path)?;
     let image = Arc::new(ImageReader::new(Arc::new(dataset), cache_bytes));
-    register_labels(&project, &image);
+    register_labels(&project, &image)?;
     attach_existing_proxy(&project, &image);
+    let coordinator = ProjectEditCoordinator::new(project.clone(), events);
+    let rolled = coordinator.recover(image.dataset())?;
+    if rolled > 0 {
+        tracing::warn!(rolled, "rolled back mask edits an earlier run left pending");
+    }
     Ok(Opened {
         project,
         image,
+        coordinator,
         assembled_root,
         layout,
     })
 }
 
-fn register_labels(project: &Project, image: &ImageReader) {
+/// Adopts the project's label store, refusing the project when it does not satisfy the
+/// contract: a half-usable project with an overlay you cannot edit and no visible reason is
+/// worse than a refusal that names the reason (design M1). Called at open and again after a
+/// re-chunk rebuilds the reader.
+pub fn register_labels(project: &Project, image: &ImageReader) -> ApiResult<()> {
     if !project.has_labels() {
-        return;
+        return Ok(());
     }
     let path = project.labels_store_path();
-    match cellstudio_core::open(&path) {
-        Ok(labels) => image.register_layer(LayerId::Labels, Arc::new(labels)),
-        Err(e) => tracing::warn!("label store at {path:?} is not readable: {e}"),
-    }
+    let refuse = |check: String| {
+        ApiError::BadRequest(format!(
+            "label store at {} does not satisfy the label contract: {check}",
+            path.display()
+        ))
+    };
+    let labels = cellstudio_core::open(&path).map_err(|e| refuse(e.to_string()))?;
+    labels::check_contract(&labels, image.dataset()).map_err(|e| refuse(e.to_string()))?;
+    check_label_ids(project).map_err(|e| refuse(e.to_string()))?;
+    image.register_layer(LayerId::Labels, Arc::new(labels));
+    Ok(())
+}
+
+/// The id half of the contract, which needs the database rather than the store: the overlay
+/// hands the fragment shader a float, so an adopted store whose recorded ids run past 2^24
+/// cannot be drawn (design M14). Reserving nothing reads the counter without moving it.
+fn check_label_ids(project: &Project) -> Result<(), cellstudio_core::labels::ContractError> {
+    let next = match project.db.reserve_label_ids(0) {
+        Ok(next) => u64::from(next),
+        Err(DbError::LabelIdsExhausted { first, .. }) => first.max(1) as u64,
+        // a counter or table this check cannot read is not a contract failure
+        Err(_) => return Ok(()),
+    };
+    labels::check_max_label(next.saturating_sub(1))
 }
 
 fn attach_existing_proxy(project: &Project, image: &ImageReader) {

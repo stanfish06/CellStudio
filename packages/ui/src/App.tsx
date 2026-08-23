@@ -35,6 +35,13 @@ export interface AppProps {
   histogram?: Histogram | null
   history?: readonly HistoryEntry[]
   status?: ProjectStatus
+  /** Backend or edit failure to show in the status bar. */
+  error?: string | null
+  /** True only while `selection` names a cell that exists on the current frame. */
+  canDeleteMask?: boolean
+  onDeleteMask?: () => void
+  onUndo?: () => void
+  onRedo?: () => void
   onMenu?: (menu: MenuId) => void
 }
 
@@ -42,6 +49,7 @@ const NO_JOBS: readonly JobState[] = []
 const NO_HISTORY: readonly HistoryEntry[] = []
 const DEFAULT_DISPLAY: DisplayState = { level: 0, zoom: 0 }
 const DEFAULT_STATUS: ProjectStatus = { saved: true, pendingWrites: 0 }
+const NOOP = () => {}
 
 export function App({
   scene,
@@ -56,6 +64,11 @@ export function App({
   histogram = null,
   history = NO_HISTORY,
   status = DEFAULT_STATUS,
+  error = null,
+  canDeleteMask = false,
+  onDeleteMask = NOOP,
+  onUndo = NOOP,
+  onRedo = NOOP,
   onMenu,
 }: AppProps) {
   const project = useNav((s) => s.project)
@@ -63,6 +76,8 @@ export function App({
   const setTool = useNav((s) => s.setTool)
   const activeView = useNav((s) => s.activeView)
   const activeChannel = useNav((s) => s.activeChannel)
+  const brushRadius = useNav((s) => s.brush.radius)
+  const setBrushRadius = useNav((s) => s.setBrushRadius)
   const resetVolumeCamera = useNav((s) => s.resetVolumeCamera)
 
   const [tab, setTab] = useState<InspectorTab>('inspect')
@@ -94,6 +109,19 @@ export function App({
         case 'tool':
           if (isToolEnabled(action.tool)) nav.setTool(action.tool)
           break
+        case 'brushRadius':
+          nav.setBrushRadius(nav.brush.radius + action.delta)
+          break
+        case 'deleteMask':
+          // Inert without a selection on this frame, matching the ribbon button.
+          if (canDeleteMask) onDeleteMask()
+          break
+        case 'undo':
+          onUndo()
+          break
+        case 'redo':
+          onRedo()
+          break
         case 'resetView':
           // Only the 3D view shows the pose the key would clear.
           if (nav.activeView === '3d') nav.resetVolumeCamera()
@@ -110,7 +138,7 @@ export function App({
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dismiss])
+  }, [dismiss, canDeleteMask, onDeleteMask, onUndo, onRedo])
 
   return (
     <div className="app">
@@ -121,6 +149,10 @@ export function App({
         onShortcuts={() => setShortcutsOpen((open) => !open)}
         onResetView={resetVolumeCamera}
         resetEnabled={activeView === '3d'}
+        brushRadius={brushRadius}
+        onBrushRadius={setBrushRadius}
+        onDeleteMask={onDeleteMask}
+        deleteEnabled={canDeleteMask}
       />
       <main className="workspace">
         <ViewPanel
@@ -150,6 +182,8 @@ export function App({
         backend={backend}
         jobs={jobs}
         perf={perf}
+        pendingWrites={status.pendingWrites}
+        error={error}
       />
       {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
     </div>

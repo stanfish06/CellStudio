@@ -30,10 +30,10 @@ export interface ProjectStatus {
   pendingWrites: number
 }
 
-/** Edit-journal row (`GET /edits`); the History tab is inert until editing ships. */
+/** Edit-journal row (`GET /edits`); `domain` mirrors the backend's `EditDomain`. */
 export interface HistoryEntry {
   seq: number
-  domain: 'mask' | 'track'
+  domain: 'mask' | 'graph'
   summary: string
   scope: string
   time: string

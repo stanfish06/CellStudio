@@ -317,6 +317,24 @@ pub enum DbError {
     UnknownState(String),
     #[error("stored edit domain {0:?} is not a known domain")]
     UnknownDomain(String),
+    #[error(
+        "label {label} is the cell on frame {existing}; a mask edit at t={requested} would \
+         move the cell and orphan its voxels — one id, one frame"
+    )]
+    LabelFrameConflict {
+        label: u32,
+        existing: u64,
+        requested: u64,
+    },
+    #[error(
+        "label {label} at t={t} would fall to {area} voxels: its extent was not seeded before \
+         the edit"
+    )]
+    ExtentUnderflow { t: u64, label: u32, area: i64 },
+    #[error("label ids {first}..={last} run past the {max} the label overlay can distinguish", max = crate::queries::MAX_LABEL_ID)]
+    LabelIdsExhausted { first: i64, last: i64 },
+    #[error("label id {0} is already in use")]
+    LabelIdTaken(u32),
 }
 
 impl DbError {

@@ -4,6 +4,8 @@ use cellstudio_core::reader::Histogram;
 use cellstudio_db::queries::{CellRow, EditEntry, LineageTree, LinkRow, Versions};
 use serde::Serialize;
 
+use crate::edit::MaskCommit;
+
 pub const SESSION_HEADER: &str = "x-cellstudio-session";
 pub const SHAPE_HEADER: &str = "x-cellstudio-shape";
 pub const DTYPE_HEADER: &str = "x-cellstudio-dtype";
@@ -257,6 +259,8 @@ pub struct EditEntryWire {
     pub domain: &'static str,
     pub scope: Option<String>,
     pub undone: bool,
+    /// False once the entry's chunk snapshots have been pruned past the retained window.
+    pub undoable: bool,
 }
 
 impl From<&EditEntry> for EditEntryWire {
@@ -267,6 +271,45 @@ impl From<&EditEntry> for EditEntryWire {
             domain: entry.domain.as_str(),
             scope: entry.scope.clone(),
             undone: entry.undone,
+            undoable: entry.undoable,
+        }
+    }
+}
+
+/// A block of label ids a session may paint with.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelLeaseWire {
+    pub first: u32,
+    pub count: u32,
+}
+
+/// What one committed mask edit tells the renderer: the version to advance to, the cells
+/// whose voxels changed, the ids that no longer exist, and the chunks to drop.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaskEditWire {
+    pub seq: i64,
+    pub version: u64,
+    pub session_id: String,
+    /// The store exists from here on, so the renderer flips its own flag without re-opening
+    /// the project (design M1).
+    pub has_labels: bool,
+    pub cells: Vec<CellRowWire>,
+    pub removed: Vec<u32>,
+    pub chunks: Vec<String>,
+}
+
+impl MaskEditWire {
+    pub fn new(session: &str, commit: MaskCommit) -> Self {
+        Self {
+            seq: commit.seq,
+            version: commit.version,
+            session_id: session.to_owned(),
+            has_labels: commit.has_labels,
+            cells: commit.cells.iter().map(CellRowWire::from).collect(),
+            removed: commit.removed,
+            chunks: commit.chunks,
         }
     }
 }

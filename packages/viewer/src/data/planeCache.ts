@@ -16,8 +16,9 @@ export interface PlaneCacheOptions {
 }
 
 /**
- * The XZ/YZ path: whole server-assembled planes keyed on their full identity, so a
- * version bump or a channel-set change is a different plane rather than a stale hit.
+ * Whole server-assembled planes keyed on their full identity, so a version bump or a
+ * channel-set change is a different plane rather than a stale hit. Carries the image's
+ * XZ/YZ views and, for the labels layer, XY as well — the image XY path is viv's tiles.
  */
 export class PlaneCache {
   private readonly api: PixelApi
@@ -71,7 +72,8 @@ export class PlaneCache {
    * `maxIndex` bounds the axis; omit it only when the caller has already clamped.
    */
   prefetch(key: PlaneKey, dir: 1 | -1, maxIndex = Number.MAX_SAFE_INTEGER): void {
-    const extent = key.axis === 'xz' ? this.brick.y : this.brick.x
+    const extent =
+      key.axis === 'xy' ? this.brick.z : key.axis === 'xz' ? this.brick.y : this.brick.x
     for (const index of orthoPrefetchIndices(key.index, dir, extent, maxIndex)) {
       this.warm({ ...key, index })
     }

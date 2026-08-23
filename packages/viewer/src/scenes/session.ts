@@ -1,5 +1,5 @@
 import type { CellRow, LayerId } from '@cellstudio/api-client'
-import type { PixelApi } from '../data/api'
+import type { MaskApi, PixelApi } from '../data/api'
 import { GpuBudget } from '../data/gpuBudget'
 import type { PlaneKey, VolumeKey } from '../data/keys'
 import { PlaneCache } from '../data/planeCache'
@@ -7,6 +7,7 @@ import { TSettleWarmer, type BrickShape } from '../data/prefetch'
 import { TrackSource } from '../data/trackSource'
 import { VolumeCache } from '../data/volumeCache'
 import { loadXyPyramid, type ZarrStoreLike } from '../data/xySource'
+import { MaskEditor } from '../edit/maskEditor'
 import { PerfMonitor } from '../perf'
 import { useNav, type ActiveView, type SliceOrientation } from '../state/nav'
 import { CursorReadout } from './cursorReadout'
@@ -24,10 +25,12 @@ import {
 export interface NavActions {
   select(cellId: number | null): void
   jumpToCell(cell: CellRow, view?: ActiveView): void
+  /** A committed mask edit, patched in without a `generation` bump (design M21). */
+  setLabelsVersion?(version: number): void
 }
 
 export interface ViewerSessionOptions {
-  api: PixelApi
+  api: PixelApi & MaskApi
   /** zarrita store over the raw `/store` passthrough; XY renders once this is set. */
   store?: ZarrStoreLike
   perf?: PerfMonitor
@@ -37,6 +40,7 @@ export interface ViewerSessionOptions {
   brick?: BrickShape
   tSettleMs?: number
   nav?: NavActions
+  onEditError?(error: unknown): void
 }
 
 const ORIENTATIONS: SliceOrientation[] = ['xy', 'xz', 'yz']
@@ -52,7 +56,10 @@ export class ViewerSession {
   readonly budget: GpuBudget
   readonly planes: PlaneCache
   readonly volumes: VolumeCache
+  /** `VolumeCache.configure` holds one prefetch context, so labels get their own (M16). */
+  readonly labelVolumes: VolumeCache
   readonly tracks: TrackSource
+  readonly editor: MaskEditor
   readonly readout: CursorReadout
   readonly slices: Record<SliceOrientation, SliceScene>
   readonly volumeScene: VolumeScene
@@ -60,8 +67,10 @@ export class ViewerSession {
   private readonly store?: ZarrStoreLike
   private readonly changed = new Emitter()
   private readonly unsubscribes: (() => void)[] = []
+  private readonly navActions: NavActions
   private nav: NavSnapshot | null = null
   private current: SceneStatus = IDLE_STATUS
+  private labelsApplied = 0
   private lastT: number | null = null
   private lastView: ActiveView | null = null
   private lastSession: string | null = null
@@ -83,12 +92,27 @@ export class ViewerSession {
       capacity: opts.volumeCapacityBytes,
       perf: this.perf,
     })
+    this.labelVolumes = new VolumeCache({
+      api: opts.api,
+      capacity: opts.volumeCapacityBytes,
+      perf: this.perf,
+    })
     this.tracks = new TrackSource(opts.api)
     this.readout = new CursorReadout({ api: opts.api, tracks: this.tracks })
     const nav = opts.nav ?? {
       select: (cellId: number | null) => useNav.getState().select(cellId),
       jumpToCell: (cell: CellRow, view?: ActiveView) => useNav.getState().jumpToCell(cell, view),
+      setLabelsVersion: (version: number) => useNav.getState().setLabelsVersion(version),
     }
+    this.navActions = nav
+    this.editor = new MaskEditor({
+      api: opts.api,
+      onCommit: (result) =>
+        this.advanceLabels(result.sessionId, result.version, result.cells, result.removed),
+      onError: opts.onEditError,
+      // The new cell continues under the next stroke, which is what selecting it buys.
+      onLabel: (label) => nav.select(label),
+    })
     const slice = (orientation: SliceOrientation) =>
       new SliceScene({
         orientation,
@@ -97,13 +121,18 @@ export class ViewerSession {
         perf: this.perf,
         budget: this.budget,
         brick: opts.brick,
+        api: opts.api,
+        editor: this.editor,
         onSelect: (cell) => nav.select(cell.id),
         // A slice-view jump stays in the current view.
         onJumpToCell: (cell) => nav.jumpToCell(cell),
+        onSelectLabel: (cellId) => nav.select(cellId),
       })
     this.slices = { xy: slice('xy'), xz: slice('xz'), yz: slice('yz') }
     this.volumeScene = new VolumeScene({
       volumes: this.volumes,
+      labelVolumes: this.labelVolumes,
+      editor: this.editor,
       tracks: this.tracks,
       perf: this.perf,
       budget: this.budget,
@@ -146,11 +175,60 @@ export class ViewerSession {
     return view === '3d' ? this.volumeScene : this.slices[view]
   }
 
+  /** The project opened with a label store, or an edit this session created one. */
+  get labelsPresent(): boolean {
+    return this.editor.labelsPresent
+  }
+
+  /** Mask writes queued or in flight — the status bar's unsaved count. */
+  get pendingWrites(): number {
+    return this.editor.pendingWrites
+  }
+
+  /**
+   * One path for both arrivals of a commit: the mask response and the WS invalidate.
+   * Idempotent by version, so whichever lands first does the work and the second returns
+   * — response-then-event and event-then-response both produce one fetch (design M21).
+   */
+  advanceLabels(
+    sessionId: string,
+    version: number,
+    cells: readonly CellRow[] = [],
+    removed: readonly number[] = [],
+  ): boolean {
+    if (this.lastSession !== null && sessionId !== this.lastSession) return false
+    if (version <= this.labelsApplied) return false
+    this.labelsApplied = version
+    this.navActions.setLabelsVersion?.(version)
+    this.planes.invalidate('labels', version)
+    this.labelVolumes.invalidate('labels', version)
+    this.tracks.patch(cells, removed)
+    const nav = this.nav
+    if (nav?.project) {
+      // The refetch happens now rather than on the next nav write.
+      this.update({
+        ...nav,
+        project: {
+          ...nav.project,
+          versions: { ...nav.project.versions, labels: version },
+        },
+      })
+    }
+    return true
+  }
+
   /** Drives the active view; inactive views warm on t-settle rather than per step. */
   update(nav: NavSnapshot): void {
     if (!nav.project) return
     this.nav = nav
     this.openGate(nav)
+    this.editor.configure({
+      dims: [nav.project.dims.z, nav.project.dims.y, nav.project.dims.x],
+      scale: nav.project.scale,
+      storePresent: nav.project.hasLabels,
+    })
+    // A lease is in hand before the first gesture, and replenished under it (design M10).
+    if (nav.tool === 'brush' || nav.tool === 'eraser') this.editor.ensureLease()
     void this.ensurePyramid(nav)
     this.scene(nav.activeView).update(nav)
     if (this.lastT !== nav.t) {
@@ -178,6 +256,7 @@ export class ViewerSession {
   invalidate(layer: LayerId, version: number): void {
     this.planes.invalidate(layer, version)
     this.volumes.invalidate(layer, version)
+    this.labelVolumes.invalidate(layer, version)
     if (layer === 'image') this.pyramidVersion = null
   }
 
@@ -193,8 +272,10 @@ export class ViewerSession {
     this.volumeScene.dispose()
     this.readout.dispose()
     this.tracks.dispose()
+    this.editor.dispose()
     this.planes.clear()
     this.volumes.clear()
+    this.labelVolumes.clear()
     this.changed.clear()
     this.nav = null
     this.current = IDLE_STATUS
@@ -218,10 +299,12 @@ export class ViewerSession {
     this.warmer.cancel()
     this.readout.clear()
     this.tracks.reset()
+    this.editor.reset()
     for (const o of ORIENTATIONS) this.slices[o].reset()
     this.volumeScene.reset()
     this.planes.clear()
     this.volumes.clear()
+    this.labelVolumes.clear()
     this.pyramidVersion = null
     this.lastT = null
     this.current = IDLE_STATUS
@@ -233,6 +316,7 @@ export class ViewerSession {
     if (sessionId !== this.lastSession) {
       if (this.lastSession !== null) this.reset()
       this.lastSession = sessionId
+      this.labelsApplied = nav.project?.versions.labels ?? 0
       this.lastView = nav.activeView
       this.pendingGate = `open:${sessionId}:${nav.activeView}`
       this.perf.begin(nav.activeView === '3d' ? 'first-volume' : 'first-pixels', this.pendingGate)

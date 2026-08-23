@@ -22,6 +22,7 @@ pub const HISTOGRAM_MAX_BYTES: u64 = 64 << 20;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OrthoAxis {
+    XY,
     XZ,
     YZ,
 }
@@ -29,6 +30,7 @@ pub enum OrthoAxis {
 impl OrthoAxis {
     pub fn orientation(self) -> Orientation {
         match self {
+            OrthoAxis::XY => Orientation::XY,
             OrthoAxis::XZ => Orientation::XZ,
             OrthoAxis::YZ => Orientation::YZ,
         }
@@ -36,6 +38,7 @@ impl OrthoAxis {
 
     pub fn index_axis(self) -> Axis {
         match self {
+            OrthoAxis::XY => Axis::Z,
             OrthoAxis::XZ => Axis::Y,
             OrthoAxis::YZ => Axis::X,
         }
@@ -165,24 +168,36 @@ impl ImageReader {
         check(index_axis, index, dims.get(index_axis))?;
 
         let grid = BrickCache::grid_shape(dims, chunks);
-        let cols = match axis {
-            OrthoAxis::XZ => dims.x,
-            OrthoAxis::YZ => dims.y,
+        let (rows, cols) = match axis {
+            OrthoAxis::XY => (dims.y, dims.x),
+            OrthoAxis::XZ => (dims.z, dims.x),
+            OrthoAxis::YZ => (dims.z, dims.y),
         };
         let element = dataset.dtype.size_bytes();
-        let mut out = vec![0_u8; (dims.z * cols) as usize * element];
+        let mut out = vec![0_u8; (rows * cols) as usize * element];
 
-        let (fixed, spans) = match axis {
-            OrthoAxis::XZ => (index / chunks.y.max(1), grid[2]),
-            OrthoAxis::YZ => (index / chunks.x.max(1), grid[1]),
+        let cells: Vec<[u64; 3]> = match axis {
+            OrthoAxis::XY => {
+                let gz = index / chunks.z.max(1);
+                (0..grid[1])
+                    .flat_map(|gy| (0..grid[2]).map(move |gx| [gz, gy, gx]))
+                    .collect()
+            }
+            OrthoAxis::XZ => {
+                let gy = index / chunks.y.max(1);
+                (0..grid[0])
+                    .flat_map(|gz| (0..grid[2]).map(move |gx| [gz, gy, gx]))
+                    .collect()
+            }
+            OrthoAxis::YZ => {
+                let gx = index / chunks.x.max(1);
+                (0..grid[0])
+                    .flat_map(|gz| (0..grid[1]).map(move |gy| [gz, gy, gx]))
+                    .collect()
+            }
         };
-        let keys: Vec<BrickKey> = (0..grid[0])
-            .flat_map(|gz| {
-                (0..spans).map(move |gs| match axis {
-                    OrthoAxis::XZ => [gz, fixed, gs],
-                    OrthoAxis::YZ => [gz, gs, fixed],
-                })
-            })
+        let keys: Vec<BrickKey> = cells
+            .into_iter()
             .map(|grid| BrickKey {
                 layer,
                 level,
@@ -196,7 +211,7 @@ impl ImageReader {
             copy_ortho_rows(&brick, axis, index, cols, element, &mut out)?;
         }
         Ok(Plane {
-            shape: [dims.z as u32, cols as u32],
+            shape: [rows as u32, cols as u32],
             dtype: dataset.dtype,
             level,
             bytes: Bytes::from(out),
@@ -402,19 +417,32 @@ fn copy_ortho_rows(
     element: usize,
     out: &mut [u8],
 ) -> Result<(), ReadError> {
-    for zi in 0..brick.shape[0] {
-        let z = brick.origin[0] + zi;
-        match axis {
-            OrthoAxis::XZ => {
-                let start = [z, index, brick.origin[2]];
+    let run = brick.shape[2] as usize * element;
+    match axis {
+        // One z of the brick contributes; the plane's rows are y.
+        OrthoAxis::XY => {
+            for yi in 0..brick.shape[1] {
+                let y = brick.origin[1] + yi;
                 let src = brick
-                    .offset(start)
+                    .offset([index, y, brick.origin[2]])
                     .ok_or(ReadError::Internal("brick row missing"))?;
-                let run = brick.shape[2] as usize * element;
+                let dst = (y * cols + brick.origin[2]) as usize * element;
+                copy_run(out, dst, &brick.bytes, src, run)?;
+            }
+        }
+        OrthoAxis::XZ => {
+            for zi in 0..brick.shape[0] {
+                let z = brick.origin[0] + zi;
+                let src = brick
+                    .offset([z, index, brick.origin[2]])
+                    .ok_or(ReadError::Internal("brick row missing"))?;
                 let dst = (z * cols + brick.origin[2]) as usize * element;
                 copy_run(out, dst, &brick.bytes, src, run)?;
             }
-            OrthoAxis::YZ => {
+        }
+        OrthoAxis::YZ => {
+            for zi in 0..brick.shape[0] {
+                let z = brick.origin[0] + zi;
                 for yi in 0..brick.shape[1] {
                     let y = brick.origin[1] + yi;
                     let src = brick
