@@ -50,17 +50,17 @@ class CellposeEvalOptions(StrictModel):
         description="run dynamics at original image size (slower, smoother boundaries)",
     )
     channel_axis: int | None = Field(
-        None, description="axis of image that is the channel axis (None = auto)"
+        None, description="axis of image that is the channel axis (null = auto)"
     )
     z_axis: int | None = Field(
-        None, description="axis of image that is the Z axis (None = auto)"
+        None, description="axis of image that is the Z axis (null = auto)"
     )
     normalize: bool | dict[str, Any] = Field(
         True,
         description="percentile-normalize each channel to [1,99]; or dict, see cellpose normalize_default",
     )
     rescale: float | None = Field(
-        None, description="resize factor, only used when diameter is None"
+        None, description="resize factor, only used when diameter is null"
     )
     diameter: float | None = Field(
         None, description="cell diameter in px; image rescaled so cells are ~30 px"
@@ -88,12 +88,12 @@ class CellposeEvalOptions(StrictModel):
         0.4, description="drop masks larger than this fraction of the image"
     )
     niter: int | None = Field(
-        None, description="dynamics iterations (None = proportional to diameter)"
+        None, description="dynamics iterations (null = proportional to diameter)"
     )
     augment: bool = Field(False, description="average over flipped tile predictions")
     tile_overlap: float = Field(0.1, description="fraction of overlap between tiles")
     bsize: int | None = Field(
-        None, description="tile size (None = model default: 256 for cpsam)"
+        None, description="tile size (null = model default: 256 for cpsam)"
     )
 
 

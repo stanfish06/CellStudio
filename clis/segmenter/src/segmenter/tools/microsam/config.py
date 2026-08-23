@@ -42,7 +42,7 @@ class MicrosamOutput(StrictModel):
         description="label image, 0 = background; with multiple inputs each file gets <input-stem>_<name>, or use {stem}/{dir} placeholders",
     )
     embeddings: Path | None = Field(
-        None, description="cache dir for image embeddings (None = recompute each run)"
+        None, description="cache dir for image embeddings (null = recompute each run)"
     )
 
 
@@ -57,14 +57,14 @@ class MicrosamModelOptions(StrictModel):
         description="_lm/_em/_histopathology models ship a decoder and support ais",
     )
     checkpoint: Path | None = Field(
-        None, description="custom checkpoint path (None = download pretrained)"
+        None, description="custom checkpoint path (null = download pretrained)"
     )
     device: str | None = Field(
         None,
-        description="cuda / mps / cpu; overrides the --gpu flag (None = cpu, or auto with --gpu)",
+        description="cuda / mps / cpu; overrides the --gpu flag (null = cpu, or auto with --gpu)",
     )
     segmentation_mode: Literal["amg", "ais", "apg"] | None = Field(
-        None, description="None = auto: ais when the model has a decoder, else amg"
+        None, description="null = auto: ais when the model has a decoder, else amg"
     )
 
 
@@ -79,7 +79,7 @@ class MicrosamTilingOptions(StrictModel):
 class MicrosamRunOptions(StrictModel):
     ndim: int | None = Field(
         None,
-        description="2 for a single 2D/RGB image, 3 for volumes/stacks (per-slice); None = auto",
+        description="2 for a single 2D/RGB image, 3 for volumes/stacks (per-slice); null = auto",
     )
     batch_size: int = Field(
         1, description="batch size for embedding computation over tiles/planes"

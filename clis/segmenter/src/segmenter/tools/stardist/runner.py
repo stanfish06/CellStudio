@@ -10,10 +10,6 @@ from segmenter.tools.stardist.io import run_batch
 
 
 def _preload_pip_cuda() -> None:
-    # TF only finds some nvidia libs via its RPATH; cudnn's JIT-compiled conv engines
-    # dlopen nvrtc/nvjitlink by bare soname and silently vanish without LD_LIBRARY_PATH
-    # ("Autotuner could not find any supported configs"). Preload the whole pip nvidia
-    # stack like torch does, so no cuda/cudnn modules are needed.
     root = Path(sysconfig.get_paths()["purelib"]) / "nvidia"
     if not root.is_dir():
         return

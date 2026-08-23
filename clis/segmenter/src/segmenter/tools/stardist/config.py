@@ -49,31 +49,31 @@ class StardistNormalizeOptions(StrictModel):
     pmin: float = Field(1.0, description="lower percentile")
     pmax: float = Field(99.8, description="upper percentile")
     axis: list[int] | None = Field(
-        None, description="axes to normalize jointly (None = all)"
+        None, description="axes to normalize jointly (null = all)"
     )
 
 
 class StardistPredictOptions(StrictModel):
     axes: str | None = Field(
         None,
-        description="axes string of the image, e.g. YX, ZYX, YXC (None = model default)",
+        description="axes string of the image, e.g. YX, ZYX, YXC (null = model default)",
     )
     prob_thresh: float | None = Field(
-        None, description="object probability cutoff (None = model's optimized value)"
+        None, description="object probability cutoff (null = model's optimized value)"
     )
     nms_thresh: float | None = Field(
-        None, description="NMS overlap cutoff (None = model's optimized value)"
+        None, description="NMS overlap cutoff (null = model's optimized value)"
     )
     scale: float | list[float] | None = Field(
         None,
         description="rescale image internally, output mapped back; scalar or per-axis e.g. [4, 1, 1] for ZYX — the size/anisotropy knob (no diameter param in stardist)",
     )
     n_tiles: list[int] | None = Field(
-        None, description="tile counts per axis to limit memory (None = no tiling)"
+        None, description="tile counts per axis to limit memory (null = no tiling)"
     )
     sparse: bool = Field(True, description="memory-efficient sparse aggregation")
     overlap_label: int | None = Field(
-        None, description="label value for overlapping regions (None = off)"
+        None, description="label value for overlapping regions (null = off)"
     )
 
 
@@ -90,7 +90,7 @@ class StardistBigOptions(StrictModel):
         description="guaranteed block overlap; every object must be smaller than this",
     )
     context: int | None = Field(
-        128, description="extra context discarded at block edges (None = auto)"
+        128, description="extra context discarded at block edges (null = auto)"
     )
 
 
