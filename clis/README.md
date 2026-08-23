@@ -46,13 +46,13 @@ First `exec` of cellpose / micro-sam / stardist downloads pretrained weights int
 
 ## CPU vs CUDA torch
 
-Default installs get CPU torch wheels (`download.pytorch.org/whl/cpu`). Each torch-using tool has `cpu`/`gpu` dependency-groups (`default-groups = ["cpu"]`); the `gpu` group pins torch to the cu130 index for cloud GPU machines:
+Default installs get CPU torch wheels (`download.pytorch.org/whl/cpu`). Each torch-using tool has `cpu`/`gpu-cu126`/`gpu-cu130` dependency-groups (`default-groups = ["cpu"]`); the gpu groups pin torch to the matching cuda index — cu126 covers sm_70-sm_90 (V100 through H100, the default), cu130 is for Blackwell-era GPUs:
 
 ```sh
-uv sync --no-group cpu --group gpu          # inside clis/<tool>, or --project clis/<tool>
+uv sync --no-group cpu --group gpu-cu126    # inside clis/<tool>, or --project clis/<tool>
 ```
 
-`cellstudio run` picks the group per tool, the same one for every command (`list`/`init`/`exec`) so the env is never re-synced back and forth: `CELLSTUDIO_TORCH=cpu|gpu` if set, else a `.torch-gpu` marker in the tool dir, else NVIDIA detection (`nvidia-smi` must run successfully; the binary alone can exist on GPU-less login nodes). A gpu decision writes the marker, so on a shared filesystem login nodes without a GPU keep dispatching the gpu env after the first GPU-node run; delete the marker (or set `CELLSTUDIO_TORCH=cpu`) to go back. The `exec --gpu` flag only controls runtime device use. Standalone `uv run` users on GPU machines must pass the group flags themselves (plain `uv run` re-syncs back to the cpu group).
+`cellstudio run` picks the group per tool, the same one for every command (`list`/`init`/`exec`) so the env is never re-synced back and forth. Resolution order: `CELLSTUDIO_TORCH` (`cpu`/`gpu`/`cu126`/`cu130`) if set, else a top-level `cuda:` key in the exec config yaml, else the `.torch-gpu` marker in the tool dir, else NVIDIA detection (`nvidia-smi` must run successfully; the binary alone can exist on GPU-less login nodes). A cuda decision writes the chosen variant into the marker, so on a shared filesystem login nodes without a GPU keep dispatching the same env after the first GPU-node run; delete the marker (or set `CELLSTUDIO_TORCH=cpu`) to go back. The `exec --gpu` flag only controls runtime device use. Standalone `uv run` users pass the group flags themselves (plain `uv run` re-syncs back to the cpu group).
 
 ## Adding an algorithm
 

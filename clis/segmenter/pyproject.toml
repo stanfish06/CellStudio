@@ -23,16 +23,28 @@ cpu = [
     "torch>=2.13",
     "torchvision>=0.28",
 ]
-gpu = [
-    "torch>=2.13",
-    "torchvision>=0.28",
+gpu-cu126 = [
+    "torch>=2.13 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision>=0.28 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+gpu-cu130 = [
+    "torch>=2.13 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision>=0.28 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 # Bio-Formats reader for vsi/ims/oir etc: uv sync --group bioformats (needs a Java runtime)
 bioformats = ["cellstudio-cli-core[bioformats]"]
 
 [tool.uv]
+# cuda index pins cannot resolve for darwin splits; these envs run on linux x86_64
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
 default-groups = ["cpu"]
-conflicts = [[{ group = "cpu" }, { group = "gpu" }]]
+conflicts = [
+    [
+        { group = "cpu" },
+        { group = "gpu-cu126" },
+        { group = "gpu-cu130" },
+    ],
+]
 # micro-sam hard-depends on pyqt6 for its napari annotator GUI; this CLI is headless
 exclude-dependencies = ["pyqt6"]
 
@@ -40,16 +52,23 @@ exclude-dependencies = ["pyqt6"]
 cellstudio-cli-core = { path = "../core", editable = true }
 torch = [
     { index = "pytorch-cpu", group = "cpu" },
-    { index = "pytorch-cu130", group = "gpu" },
+    { index = "pytorch-cu126", group = "gpu-cu126" },
+    { index = "pytorch-cu130", group = "gpu-cu130" },
 ]
 torchvision = [
     { index = "pytorch-cpu", group = "cpu" },
-    { index = "pytorch-cu130", group = "gpu" },
+    { index = "pytorch-cu126", group = "gpu-cu126" },
+    { index = "pytorch-cu130", group = "gpu-cu130" },
 ]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [[tool.uv.index]]

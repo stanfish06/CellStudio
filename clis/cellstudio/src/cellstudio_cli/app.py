@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -72,23 +73,51 @@ def _nvidia_gpu_present() -> bool:
         return False
 
 
-def _torch_group(tool_dir: Path) -> str:
-    """cpu or gpu, stable across commands so the tool env is not re-synced back and forth.
+_CUDA_VARIANTS = ("cu126", "cu130")  # what torch>=2.13 is published for
+_DEFAULT_CUDA = (
+    "cu126"  # covers sm_70 (V100) through sm_90 (H100); cu130 is Blackwell-era
+)
+_CUDA_RE = re.compile(r"^\s*cuda:\s*[\"']?(cu\d{3})", re.MULTILINE)
 
-    CELLSTUDIO_TORCH overrides; a gpu decision is persisted in a marker file so
-    shared-filesystem nodes without a GPU (e.g. cluster login nodes) keep using it.
+
+def _yaml_cuda(args: list[str]) -> str | None:
+    for arg in args:
+        p = Path(arg)
+        if p.suffix.lower() in (".yaml", ".yml") and p.is_file():
+            m = _CUDA_RE.search(p.read_text())
+            if m:
+                return m.group(1)
+    return None
+
+
+def _torch_group(tool_dir: Path, args: list[str]) -> str:
+    """cpu or a cuda variant, stable across commands so the tool env is not
+    re-synced back and forth.
+
+    Priority: CELLSTUDIO_TORCH env (cpu/gpu/cuXXX) > `cuda:` in the exec config
+    yaml > marker file > NVIDIA detection. A cuda decision is persisted in the
+    marker so shared-filesystem nodes without a GPU (e.g. cluster login nodes)
+    keep using it; delete the marker to go back to cpu.
     """
     marker = tool_dir / ".torch-gpu"
     env = os.environ.get("CELLSTUDIO_TORCH")
-    if env in ("cpu", "gpu"):
-        group = env
-    elif marker.exists() or _nvidia_gpu_present():
-        group = "gpu"
-    else:
-        group = "cpu"
-    if group == "gpu":
-        marker.touch(exist_ok=True)
-    return group
+    choice = None
+    if env == "cpu":
+        choice = "cpu"
+    elif env == "gpu":
+        choice = _DEFAULT_CUDA
+    elif env in _CUDA_VARIANTS:
+        choice = env
+    if choice is None:
+        choice = _yaml_cuda(args)
+    if choice is None and marker.exists():
+        content = marker.read_text().strip()
+        choice = content if content in _CUDA_VARIANTS else _DEFAULT_CUDA
+    if choice is None:
+        choice = _DEFAULT_CUDA if _nvidia_gpu_present() else "cpu"
+    if choice != "cpu":
+        marker.write_text(choice + "\n")
+    return choice
 
 
 # formats only Bio-Formats can read; a config mentioning one turns on the bioformats group
@@ -126,8 +155,10 @@ def discover_tools() -> dict[str, dict]:
         tools[path.name] = {
             "dir": path,
             "description": meta.get("description", ""),
-            # cpu/gpu dependency-groups switch between cpu and cuda torch builds
-            "gpu_groups": {"cpu", "gpu"} <= groups,
+            # cpu/gpu-cuXXX dependency-groups switch between cpu and cuda torch builds
+            "gpu_groups": "cpu" in groups
+            and any(g.startswith("gpu-cu") for g in groups),
+            "groups": groups,
             "bioformats_group": "bioformats" in groups,
         }
     return tools
@@ -172,9 +203,23 @@ def run(
     ):
         cmd += ["--group", "bioformats"]
     if tools[tool]["gpu_groups"]:
-        group = _torch_group(tools[tool]["dir"])
-        if group == "gpu":
-            cmd += ["--no-group", "cpu", "--group", "gpu"]
+        choice = _torch_group(tools[tool]["dir"], ctx.args)
+        if choice != "cpu":
+            if f"gpu-{choice}" not in tools[tool]["groups"]:
+                available = ", ".join(
+                    sorted(
+                        g.removeprefix("gpu-")
+                        for g in tools[tool]["groups"]
+                        if g.startswith("gpu-cu")
+                    )
+                )
+                typer.secho(
+                    f"error: {tool} has no gpu-{choice} group (available cuda builds: {available})",
+                    fg="red",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            cmd += ["--no-group", "cpu", "--group", f"gpu-{choice}"]
         elif "--gpu" in ctx.args:
             typer.secho(
                 "no NVIDIA GPU detected; keeping cpu torch", fg="yellow", err=True

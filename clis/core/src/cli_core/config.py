@@ -1,9 +1,10 @@
 import types
 import typing
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StrictModel(BaseModel):
@@ -17,6 +18,10 @@ class IOSection(StrictModel):
 class ToolConfig(StrictModel):
     tool: str
     algorithm: str
+    cuda: Literal["cu126", "cu130"] | None = Field(
+        None,
+        description="cuda build for the tool env, used by cellstudio dispatch on GPU machines (null = auto, cu126)",
+    )
 
 
 def _literal_choices(annotation) -> list | None:
