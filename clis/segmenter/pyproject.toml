@@ -33,6 +33,8 @@ bioformats = ["cellstudio-cli-core[bioformats]"]
 [tool.uv]
 default-groups = ["cpu"]
 conflicts = [[{ group = "cpu" }, { group = "gpu" }]]
+# micro-sam hard-depends on pyqt6 for its napari annotator GUI; this CLI is headless
+exclude-dependencies = ["pyqt6"]
 
 [tool.uv.sources]
 cellstudio-cli-core = { path = "../core", editable = true }
