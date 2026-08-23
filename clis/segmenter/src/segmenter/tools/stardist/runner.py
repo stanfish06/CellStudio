@@ -9,27 +9,33 @@ from segmenter.tools.stardist.config import StardistConfig
 from segmenter.tools.stardist.io import run_batch
 
 
-def _preload_pip_cudnn() -> None:
-    # TF dlopens libcudnn.so.9 but cudnn's engine sub-libraries do not resolve from
-    # the pip layout on their own (CUDNN_STATUS_INTERNAL_ERROR at init); preload them
-    # by absolute path like torch does, so no system cudnn module is needed
-    libdir = Path(sysconfig.get_paths()["purelib"]) / "nvidia" / "cudnn" / "lib"
-    if not libdir.is_dir():
+def _preload_pip_cuda() -> None:
+    # TF only finds some nvidia libs via its RPATH; cudnn's JIT-compiled conv engines
+    # dlopen nvrtc/nvjitlink by bare soname and silently vanish without LD_LIBRARY_PATH
+    # ("Autotuner could not find any supported configs"). Preload the whole pip nvidia
+    # stack like torch does, so no cuda/cudnn modules are needed.
+    root = Path(sysconfig.get_paths()["purelib"]) / "nvidia"
+    if not root.is_dir():
         return
-    for so in sorted(libdir.glob("libcudnn*.so.*")):
-        try:
-            ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
-        except OSError:
-            pass
+    libs = sorted(root.glob("*/lib/*.so*"))
+    for _ in range(2):  # second pass resolves load-order dependencies
+        failed = []
+        for so in libs:
+            try:
+                ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
+            except OSError:
+                failed.append(so)
+        libs = failed
+        if not libs:
+            return
 
 
 def run(cfg: StardistConfig, ctx: RunContext) -> dict:
     if ctx.gpu:
         import os
 
-        # without this TF pre-allocates the whole GPU and XLA autotuning has no workspace
         os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
-        _preload_pip_cudnn()
+        _preload_pip_cuda()
     else:
         import tensorflow as tf
 
@@ -40,6 +46,8 @@ def run(cfg: StardistConfig, ctx: RunContext) -> dict:
     opts = cfg.options
     model_cls = StarDist3D if opts.model.pretrained.startswith("3D") else StarDist2D
     model = model_cls.from_pretrained(opts.model.pretrained)
+    if hasattr(model.keras_model, "jit_compile"):
+        model.keras_model.jit_compile = False
 
     predict_kwargs = opts.predict.model_dump()
     if predict_kwargs["n_tiles"] is not None:
