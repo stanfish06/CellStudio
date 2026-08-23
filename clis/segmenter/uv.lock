@@ -765,7 +765,7 @@ resolution-markers = [
     "python_full_version < '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "cuda-pathfinder", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "cuda-pathfinder", marker = "(python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (python_full_version >= '3.15' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/dc/62d62eb4f91eb721bcf46da51b13e9872ccd8fa7e60eb8ba7b7baeac72c6/cuda_bindings-12.9.7-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:59cf4a37b0d662ba15037c9ceebe1a306ebf2c01a8235a09be13cd07094fdb74", size = 7457675, upload-time = "2026-05-27T18:44:20.637Z" },
@@ -783,7 +783,7 @@ resolution-markers = [
     "python_full_version < '3.14' and platform_machine == 'x86_64' and sys_platform == 'linux'",
 ]
 dependencies = [
-    { name = "cuda-pathfinder", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'group-9-segmenter-cpu' and extra != 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "cuda-pathfinder", marker = "(python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra != 'group-9-segmenter-cpu' and extra != 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/34/c2/ef9b6a63f7dc432712a462c816662e662e00d38caa9b861c8c2588195d03/cuda_bindings-13.3.1-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:2732904099e0a4d4db774a5fc6d91ee95fae065b4d2ecabb4968c5fe2406c9d7", size = 6476660, upload-time = "2026-05-29T23:11:59.188Z" },
@@ -2337,6 +2337,14 @@ wheels = [
 ]
 
 [[package]]
+name = "nvidia-cuda-nvcc-cu12"
+version = "12.9.86"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/25/48/b54a06168a2190572a312bfe4ce443687773eb61367ced31e064953dd2f7/nvidia_cuda_nvcc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:5d6a0d32fdc7ea39917c20065614ae93add6f577d840233237ff08e9a38f58f0", size = 40546229, upload-time = "2025-06-05T20:01:53.357Z" },
+]
+
+[[package]]
 name = "nvidia-cuda-nvrtc"
 version = "13.0.88"
 source = { registry = "https://pypi.org/simple" }
@@ -2374,7 +2382,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.10.2.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/51/e123d997aa098c61d029f76663dedbfb9bc8dcf8c60cbd6adbe42f76d049/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:949452be657fa16687d0930933f032835951ef0892b37d2d53824d1a84dc97a8", size = 706758467, upload-time = "2025-06-06T21:54:08.597Z" },
@@ -2407,7 +2415,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.0.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/16/73727675941ab8e6ffd86ca3a4b7b47065edcca7a997920b831f8147c99d/nvidia_cufft_cu12-11.3.0.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:ccba62eb9cef5559abd5e0d54ceed2d9934030f51163df018532142a8ec533e5", size = 200221632, upload-time = "2024-11-20T17:41:32.357Z" },
@@ -2465,9 +2473,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
-    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "nvidia-cusparse-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f0/6e/c2cf12c9ff8b872e92b4a5740701e51ff17689c4d726fca91875b07f655d/nvidia_cusolver_cu12-11.7.1.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:e9e49843a7707e42022babb9bcfa33c29857a93b88020c4e4434656a655b698c", size = 158229790, upload-time = "2024-11-20T17:43:43.211Z" },
@@ -2490,7 +2498,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (sys_platform != 'linux' and extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/06/1e/b8b7c2f4099a37b96af5c9bb158632ea9e5d9d27d7391d7eb8fc45236674/nvidia_cusparse_cu12-12.5.4.2-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7556d9eca156e18184b94947ade0fba5bb47d69cec46bf8660fd2c71a4b48b73", size = 216561367, upload-time = "2024-11-20T17:44:54.824Z" },
@@ -3376,10 +3384,12 @@ cpu = [
     { name = "torchvision", version = "0.28.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 gpu-cu126 = [
+    { name = "tensorflow", extra = ["and-cuda"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu126') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
     { name = "torch", version = "2.13.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchvision", version = "0.28.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 gpu-cu130 = [
+    { name = "tensorflow", extra = ["and-cuda"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'group-9-segmenter-gpu-cu130') or (platform_machine != 'x86_64' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (sys_platform != 'linux' and extra == 'group-9-segmenter-gpu-cu126' and extra == 'group-9-segmenter-gpu-cu130') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu126') or (extra == 'group-9-segmenter-cpu' and extra == 'group-9-segmenter-gpu-cu130')" },
     { name = "torch", version = "2.13.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "torchvision", version = "0.28.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" }, marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
@@ -3400,10 +3410,12 @@ cpu = [
     { name = "torchvision", specifier = ">=0.28", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "segmenter", group = "cpu" } },
 ]
 gpu-cu126 = [
+    { name = "tensorflow", extras = ["and-cuda"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=2.20" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=2.13", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "segmenter", group = "gpu-cu126" } },
     { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.28", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "segmenter", group = "gpu-cu126" } },
 ]
 gpu-cu130 = [
+    { name = "tensorflow", extras = ["and-cuda"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=2.20" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=2.13", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "segmenter", group = "gpu-cu130" } },
     { name = "torchvision", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=0.28", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "segmenter", group = "gpu-cu130" } },
 ]
@@ -3624,6 +3636,22 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/86/6c/10d075ffc09754c7f10e749ba3c9d46dd809fb007990c7f788128044180c/tensorflow-2.21.0-cp313-cp313-manylinux_2_27_x86_64.whl", hash = "sha256:e9d8da8dcab9650efb45f032ba70af2f016f907e6e0c6bda29dd101bba945406", size = 572881074, upload-time = "2026-03-06T17:25:14.453Z" },
+]
+
+[package.optional-dependencies]
+and-cuda = [
+    { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-cupti-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvcc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-nvrtc-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cuda-runtime-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cufft-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-curand-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusolver-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-cusparse-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nccl-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 
 [[package]]

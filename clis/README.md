@@ -46,7 +46,7 @@ First `exec` of cellpose / micro-sam / stardist downloads pretrained weights int
 
 ## CPU vs CUDA torch
 
-Default installs get CPU torch wheels (`download.pytorch.org/whl/cpu`). Each torch-using tool has `cpu`/`gpu-cu126`/`gpu-cu130` dependency-groups (`default-groups = ["cpu"]`); the gpu groups pin torch to the matching cuda index — cu126 covers sm_70-sm_90 (V100 through H100, the default), cu130 is for Blackwell-era GPUs:
+Default installs get CPU torch wheels (`download.pytorch.org/whl/cpu`). Each torch-using tool has `cpu`/`gpu-cu126`/`gpu-cu130` dependency-groups (`default-groups = ["cpu"]`); the gpu groups pin torch to the matching cuda index (and in the segmenter also install tensorflow's pip cuda libraries, which stardist needs to see the GPU) — cu126 covers sm_70-sm_90 (V100 through H100, the default), cu130 is for Blackwell-era GPUs:
 
 ```sh
 uv sync --no-group cpu --group gpu-cu126    # inside clis/<tool>, or --project clis/<tool>

@@ -26,10 +26,14 @@ cpu = [
 gpu-cu126 = [
     "torch>=2.13 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision>=0.28 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # tensorflow's cuda libs come from pip; without this TF silently runs on CPU
+    "tensorflow[and-cuda]>=2.20 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 gpu-cu130 = [
     "torch>=2.13 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision>=0.28 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # tensorflow's cuda libs come from pip; without this TF silently runs on CPU
+    "tensorflow[and-cuda]>=2.20 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 # Bio-Formats reader for vsi/ims/oir etc: uv sync --group bioformats (needs a Java runtime)
 bioformats = ["cellstudio-cli-core[bioformats]"]
