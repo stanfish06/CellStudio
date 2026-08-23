@@ -64,8 +64,9 @@ class StardistPredictOptions(StrictModel):
     nms_thresh: float | None = Field(
         None, description="NMS overlap cutoff (None = model's optimized value)"
     )
-    scale: float | None = Field(
-        None, description="rescale image internally by this factor, output scaled back"
+    scale: float | list[float] | None = Field(
+        None,
+        description="rescale image internally, output mapped back; scalar or per-axis e.g. [4, 1, 1] for ZYX — the size/anisotropy knob (no diameter param in stardist)",
     )
     n_tiles: list[int] | None = Field(
         None, description="tile counts per axis to limit memory (None = no tiling)"

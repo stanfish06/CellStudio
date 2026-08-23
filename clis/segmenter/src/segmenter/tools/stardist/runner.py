@@ -1,3 +1,7 @@
+import ctypes
+import sysconfig
+from pathlib import Path
+
 import numpy as np
 from cli_core.registry import RunContext
 
@@ -5,8 +9,24 @@ from segmenter.tools.stardist.config import StardistConfig
 from segmenter.tools.stardist.io import run_batch
 
 
+def _preload_pip_cudnn() -> None:
+    # TF dlopens libcudnn.so.9 but cudnn's engine sub-libraries do not resolve from
+    # the pip layout on their own (CUDNN_STATUS_INTERNAL_ERROR at init); preload them
+    # by absolute path like torch does, so no system cudnn module is needed
+    libdir = Path(sysconfig.get_paths()["purelib"]) / "nvidia" / "cudnn" / "lib"
+    if not libdir.is_dir():
+        return
+    for so in sorted(libdir.glob("libcudnn*.so.*")):
+        try:
+            ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
+        except OSError:
+            pass
+
+
 def run(cfg: StardistConfig, ctx: RunContext) -> dict:
-    if not ctx.gpu:
+    if ctx.gpu:
+        _preload_pip_cudnn()
+    else:
         import tensorflow as tf
 
         tf.config.set_visible_devices([], "GPU")
@@ -20,6 +40,8 @@ def run(cfg: StardistConfig, ctx: RunContext) -> dict:
     predict_kwargs = opts.predict.model_dump()
     if predict_kwargs["n_tiles"] is not None:
         predict_kwargs["n_tiles"] = tuple(predict_kwargs["n_tiles"])
+    if isinstance(predict_kwargs["scale"], list):
+        predict_kwargs["scale"] = tuple(predict_kwargs["scale"])
 
     def prepare(img: np.ndarray) -> np.ndarray:
         if not opts.normalize.enabled:
