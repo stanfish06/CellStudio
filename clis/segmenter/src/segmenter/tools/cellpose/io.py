@@ -7,7 +7,9 @@ from segmenter.tools.cellpose.config import CellposeConfig
 def load_input(cfg: CellposeConfig) -> np.ndarray:
     if cfg.io.input.image is None:
         raise ValueError("io.input.image is required")
-    return core_io.read_image(cfg.io.input.image)
+    return core_io.read_image(
+        cfg.io.input.image, cfg.io.input.scene, cfg.io.input.channel
+    )
 
 
 def save_output(cfg: CellposeConfig, masks: np.ndarray) -> dict:

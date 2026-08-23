@@ -27,6 +27,8 @@ gpu = [
     "torch>=2.13",
     "torchvision>=0.28",
 ]
+# Bio-Formats reader for vsi/ims/oir etc: uv sync --group bioformats (needs a Java runtime)
+bioformats = ["cellstudio-cli-core[bioformats]"]
 
 [tool.uv]
 default-groups = ["cpu"]

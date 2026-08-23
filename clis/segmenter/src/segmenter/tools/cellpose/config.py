@@ -8,7 +8,14 @@ from pydantic import Field
 class CellposeInput(StrictModel):
     image: Path | None = Field(
         None,
-        description="required: .tif/.tiff/.npy file or directory of tiffs (stacked along first axis)",
+        description="required: microscopy image: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, or a directory of images (stacked on axis 0)",
+    )
+    scene: int | str | None = Field(
+        None,
+        description="scene to read from multi-scene formats, index or name (null = first)",
+    )
+    channel: int | str | None = Field(
+        None, description="channel to read, index or name (null = all channels)"
     )
 
 
