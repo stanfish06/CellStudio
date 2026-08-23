@@ -2,7 +2,7 @@ import numpy as np
 from cli_core.registry import RunContext
 
 from segmenter.tools.stardist.config import StardistConfig
-from segmenter.tools.stardist.io import load_input, save_output
+from segmenter.tools.stardist.io import run_batch
 
 
 def run(cfg: StardistConfig, ctx: RunContext) -> dict:
@@ -16,7 +16,6 @@ def run(cfg: StardistConfig, ctx: RunContext) -> dict:
     opts = cfg.options
     model_cls = StarDist3D if opts.model.pretrained.startswith("3D") else StarDist2D
     model = model_cls.from_pretrained(opts.model.pretrained)
-    image = load_input(cfg).astype(np.float32)
 
     predict_kwargs = opts.predict.model_dump()
     if predict_kwargs["n_tiles"] is not None:
@@ -28,7 +27,7 @@ def run(cfg: StardistConfig, ctx: RunContext) -> dict:
         axis = tuple(opts.normalize.axis) if opts.normalize.axis else None
         return normalize(img, opts.normalize.pmin, opts.normalize.pmax, axis=axis)
 
-    def predict(img: np.ndarray) -> np.ndarray:
+    def predict_one(img: np.ndarray) -> np.ndarray:
         if opts.big.enabled:
             if predict_kwargs["axes"] is None:
                 raise ValueError(
@@ -45,8 +44,10 @@ def run(cfg: StardistConfig, ctx: RunContext) -> dict:
             labels, _details = model.predict_instances(img, **predict_kwargs)
         return labels
 
-    if opts.per_frame:
-        masks = np.stack([predict(prepare(frame)) for frame in image])
-    else:
-        masks = predict(prepare(image))
-    return save_output(cfg, masks)
+    def predict(image, _source):
+        image = image.astype(np.float32)
+        if opts.per_frame:
+            return np.stack([predict_one(prepare(frame)) for frame in image])
+        return predict_one(prepare(image))
+
+    return run_batch(cfg, predict)

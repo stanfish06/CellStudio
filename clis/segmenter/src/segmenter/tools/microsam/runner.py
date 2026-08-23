@@ -1,7 +1,7 @@
 from cli_core.registry import RunContext
 
 from segmenter.tools.microsam.config import MicrosamConfig
-from segmenter.tools.microsam.io import load_input, save_output
+from segmenter.tools.microsam.io import run_batch
 
 
 def run(cfg: MicrosamConfig, ctx: RunContext) -> dict:
@@ -11,7 +11,6 @@ def run(cfg: MicrosamConfig, ctx: RunContext) -> dict:
     )
     from micro_sam.instance_segmentation import InstanceSegmentationWithDecoder
 
-    image = load_input(cfg)
     opts = cfg.options
     # explicit config device wins; else --gpu = auto-pick (cuda/mps), default = cpu
     device = opts.model.device or (None if ctx.gpu else "cpu")
@@ -30,16 +29,21 @@ def run(cfg: MicrosamConfig, ctx: RunContext) -> dict:
     else:
         generate_kwargs = opts.amg.model_dump()
 
-    masks = automatic_instance_segmentation(
-        predictor,
-        segmenter,
-        input_path=image,
-        embedding_path=cfg.io.output.embeddings,
-        ndim=opts.run.ndim,
-        tile_shape=tuple(opts.tiling.tile_shape) if opts.tiling.enabled else None,
-        halo=tuple(opts.tiling.halo) if opts.tiling.enabled else None,
-        batch_size=opts.run.batch_size,
-        verbose=opts.run.verbose,
-        **generate_kwargs,
-    )
-    return save_output(cfg, masks)
+    def predict(image, source):
+        embeddings = cfg.io.output.embeddings
+        if embeddings is not None:
+            embeddings = embeddings / source.stem  # cache per input file
+        return automatic_instance_segmentation(
+            predictor,
+            segmenter,
+            input_path=image,
+            embedding_path=embeddings,
+            ndim=opts.run.ndim,
+            tile_shape=tuple(opts.tiling.tile_shape) if opts.tiling.enabled else None,
+            halo=tuple(opts.tiling.halo) if opts.tiling.enabled else None,
+            batch_size=opts.run.batch_size,
+            verbose=opts.run.verbose,
+            **generate_kwargs,
+        )
+
+    return run_batch(cfg, predict)

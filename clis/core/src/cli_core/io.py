@@ -113,6 +113,59 @@ def _read_bioio(
     return squeezed
 
 
+def resolve_inputs(path: Path) -> list[Path]:
+    """Expand a glob pattern or directory into the list of input files."""
+    if globlib.has_magic(str(path)):
+        matches = sorted(Path(p) for p in globlib.glob(str(path)))
+        if not matches:
+            raise FileNotFoundError(f"no files match pattern {path}")
+        return matches
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    if path.is_dir() and path.suffix.lower() != ".zarr":
+        files = sorted(
+            p for p in path.iterdir() if p.suffix.lower() in STACKABLE_SUFFIXES
+        )
+        if not files:
+            raise FileNotFoundError(f"no readable image files in directory {path}")
+        return files
+    return [path]
+
+
+def render_output(template: Path, source: Path, multi: bool) -> Path:
+    """Per-input output path: {stem}/{dir} placeholders, else '<input-stem>_<name>' when multiple inputs."""
+    text = str(template)
+    if "{stem}" in text or "{dir}" in text:
+        return Path(text.format(stem=source.stem, dir=source.parent))
+    if not multi:
+        return template
+    return template.parent / f"{source.stem}_{template.name}"
+
+
+def segment_batch(input_path, scene, channel, output_template, predict) -> dict:
+    """Run predict(image, source_path) per input file, one labels output per input."""
+    sources = resolve_inputs(input_path)
+    multi = len(sources) > 1
+    outputs, total = [], 0
+    for i, src in enumerate(sources, 1):
+        masks = predict(read_image(src, scene, channel), src)
+        out = write_labels(render_output(Path(output_template), src, multi), masks)
+        count = int(len(np.unique(masks)) - 1)
+        total += count
+        outputs.append(out)
+        if multi:
+            print(f"[{i}/{len(sources)}] {src.name} -> {out.name}: {count} objects")
+    result = {}
+    if multi:
+        result["inputs"] = len(sources)
+        result["masks"] = f"{len(outputs)} files in {outputs[0].parent.resolve()}"
+    else:
+        result["masks"] = str(outputs[0])
+    result["objects"] = total
+    return result
+
+
 def write_labels(path: Path, labels: np.ndarray) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

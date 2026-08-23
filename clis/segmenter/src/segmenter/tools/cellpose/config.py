@@ -8,7 +8,7 @@ from pydantic import Field
 class CellposeInput(StrictModel):
     image: Path | None = Field(
         None,
-        description="required: microscopy image: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, a directory, or a glob pattern like '/data/*.ims' (files stacked on axis 0; quote patterns starting with *)",
+        description="required: microscopy image: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, a directory, or a glob pattern like '/data/*.ims' (each file segmented separately; quote patterns starting with *)",
     )
     scene: int | str | None = Field(
         None,
@@ -20,7 +20,10 @@ class CellposeInput(StrictModel):
 
 
 class CellposeOutput(StrictModel):
-    masks: Path = Field(Path("masks.tif"), description="label image, 0 = background")
+    masks: Path = Field(
+        Path("masks.tif"),
+        description="label image, 0 = background; with multiple inputs each file gets <input-stem>_<name>, or use {stem}/{dir} placeholders",
+    )
 
 
 class CellposeIO(IOSection):

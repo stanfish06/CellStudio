@@ -20,8 +20,8 @@ cellstudio run <tool> exec <config.yaml> [--gpu]  # run (CPU default)
 
 ## IO contract
 
-- segmenter input `io.input.image`: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, a directory, or a glob pattern like /data/*.ims (files stacked on axis 0; quote yaml values starting with *): non-tiff formats are read via bioio as TCZYX then squeezed, printing dims, channel names, and pixel sizes. `io.input.scene` / `io.input.channel` (index or name) select from multi-scene/multi-channel files. Output `io.output.masks`: label tiff, 0 = background.
-- tracker input `io.input.labels`: TYX or TZYX label stack. Outputs: `tracks.csv` (frame, label, track_id, tree_id; centroid mode adds centroid-* columns), laptrack also `splits.csv`/`merges.csv` (parent_track_id, child_track_id), and `tracked_labels.tif` where pixel value = track_id + 1.
+- segmenter input `io.input.image`: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, a directory, or a glob pattern like /data/*.ims (quote yaml values starting with *). Multiple files = batch mode: each file is segmented independently and written as `<input-stem>_<masks-name>` (or use `{stem}`/`{dir}` placeholders in `io.output.masks`, e.g. "{dir}/{stem}_masks.tif"). Non-tiff formats are read via bioio as TCZYX then squeezed, printing dims, channel names, and pixel sizes; `io.input.scene`/`io.input.channel` (index or name) apply per file. Output masks: label tiff, 0 = background.
+- tracker input `io.input.labels`: TYX or TZYX label stack; a directory or glob here is stacked on axis 0 (frames), e.g. the per-frame masks a segmenter batch produced. Outputs: `tracks.csv` (frame, label, track_id, tree_id; centroid mode adds centroid-* columns), laptrack also `splits.csv`/`merges.csv` (parent_track_id, child_track_id), and `tracked_labels.tif` where pixel value = track_id + 1.
 - Relative paths in a config resolve against the cwd of `exec`, not the yaml's location.
 
 ## Pitfalls

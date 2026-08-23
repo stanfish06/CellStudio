@@ -1,13 +1,12 @@
 from cli_core.registry import RunContext
 
 from segmenter.tools.cellpose.config import CellposeConfig
-from segmenter.tools.cellpose.io import load_input, save_output
+from segmenter.tools.cellpose.io import run_batch
 
 
 def run(cfg: CellposeConfig, ctx: RunContext) -> dict:
     from cellpose import models
 
-    image = load_input(cfg)
     opts = cfg.options.model
     device = None
     if opts.device is not None:
@@ -20,5 +19,10 @@ def run(cfg: CellposeConfig, ctx: RunContext) -> dict:
         device=device,
         use_bfloat16=opts.use_bfloat16,
     )
-    masks, _flows, _styles = model.eval(image, **cfg.options.eval.model_dump())
-    return save_output(cfg, masks)
+    eval_kwargs = cfg.options.eval.model_dump()
+
+    def predict(image, _source):
+        masks, _flows, _styles = model.eval(image, **eval_kwargs)
+        return masks
+
+    return run_batch(cfg, predict)
