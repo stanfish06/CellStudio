@@ -97,6 +97,10 @@ def _read_bioio(
             channel = names.index(channel)
         data = data[:, channel : channel + 1]
     squeezed = np.squeeze(data)
+    # axes surviving the squeeze, with their indices in the array fed to the model
+    kept = [(ax, n) for ax, n in zip("TCZYX", data.shape) if n > 1]
+    kept_axes = "".join(ax for ax, _ in kept)
+    axis_map = ", ".join(f"{ax}=axis {i}" for i, (ax, _) in enumerate(kept))
     # metadata accessors can raise on files with sparse metadata; never fail a good read over the log line
     try:
         scene_label = img.current_scene
@@ -107,7 +111,7 @@ def _read_bioio(
     except Exception:  # noqa: BLE001
         pixel_sizes = (None, None, None)
     print(
-        f"[io] {path.name}: scene={scene_label} dims=TCZYX {full_shape} -> {squeezed.shape}, "
+        f"[io] {path.name}: scene={scene_label} TCZYX {full_shape} -> model input {kept_axes} {squeezed.shape} ({axis_map}), "
         f"channels={names}, pixel size ZYX={pixel_sizes}"
     )
     return squeezed
