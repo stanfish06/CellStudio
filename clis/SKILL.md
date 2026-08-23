@@ -16,7 +16,7 @@ cellstudio run <tool> init --algo <name> [-o f]   # emit config yaml
 cellstudio run <tool> exec <config.yaml> [--gpu]  # run (CPU default)
 ```
 
-`cellstudio run <tool> ...` == `uv run --project clis/<tool> <tool> ...` (each tool has its own venv; never use system python or pip). `--help` works after any subcommand. If `cellstudio` is not installed: `uv tool install --editable clis/cellstudio`.
+`cellstudio run <tool> ...` == `uv run --project clis/<tool> <tool> ...` (each tool has its own venv; never use system python or pip). `--help` works after any subcommand. If `cellstudio` is not installed: `uv tool install clis/cellstudio` (add `--editable` when developing the umbrella itself); it locates the repo from the install source, or from `CELLSTUDIO_CLIS_DIR` if the repo moved.
 
 ## IO contract
 

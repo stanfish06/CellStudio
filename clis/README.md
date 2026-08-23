@@ -13,7 +13,7 @@ clis/
 ## Usage
 
 ```sh
-uv tool install --editable clis/cellstudio   # once; puts `cellstudio` on PATH
+uv tool install clis/cellstudio   # once; puts `cellstudio` on PATH (-e for umbrella dev)
 
 cellstudio tool list                          # segmenter, tracker
 cellstudio run segmenter list                 # algorithms + installed versions

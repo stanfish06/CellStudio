@@ -8,7 +8,7 @@ import tomllib
 import typer
 
 app = typer.Typer(
-        help="CellStudio CLI: dispatches tool CLIs (segmenter, tracker, ...) in their own environments.",
+    help="CellStudio CLI: dispatches tool CLIs (segmenter, tracker, ...) in their own environments.",
     add_completion=False,
     no_args_is_help=True,
 )
@@ -18,24 +18,38 @@ app.add_typer(tool_app, name="tool")
 _NON_TOOL_DIRS = {"core", "cellstudio"}
 
 
+def _is_clis_dir(path: Path) -> bool:
+    return (path / "core" / "pyproject.toml").is_file() and (
+        path / "cellstudio"
+    ).is_dir()
+
+
 def find_clis_dir() -> Path:
     env = os.environ.get("CELLSTUDIO_CLIS_DIR")
     if env:
         return Path(env)
     # editable install: this file lives at clis/cellstudio/src/cellstudio_cli/app.py
     for parent in Path(__file__).resolve().parents:
-        if (parent / "core" / "pyproject.toml").is_file() and (
-            parent / "cellstudio"
-        ).is_dir():
+        if _is_clis_dir(parent):
             return parent
+    # tool install (non-editable): uv records the source dir in the tool venv's receipt
+    receipt = Path(sys.prefix) / "uv-receipt.toml"
+    if receipt.is_file():
+        for req in (
+            tomllib.loads(receipt.read_text()).get("tool", {}).get("requirements", [])
+        ):
+            src = req.get("directory") or req.get("editable") or req.get("path")
+            if src and _is_clis_dir(Path(src).parent):
+                return Path(src).parent
     # fallback: walk up from cwd looking for a clis/ directory
     for parent in [Path.cwd(), *Path.cwd().parents]:
-        if (parent / "clis" / "core").is_dir():
+        if _is_clis_dir(parent / "clis"):
             return parent / "clis"
-        if parent.name == "clis" and (parent / "core").is_dir():
+        if _is_clis_dir(parent):
             return parent
     typer.secho(
-        "error: cannot locate the clis/ directory (set CELLSTUDIO_CLIS_DIR)",
+        "error: cannot locate the clis/ directory — set CELLSTUDIO_CLIS_DIR=<repo>/clis, "
+        "or reinstall from the repo: uv tool install --reinstall <repo>/clis/cellstudio",
         fg="red",
         err=True,
     )
