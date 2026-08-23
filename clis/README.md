@@ -52,7 +52,7 @@ Default installs get CPU torch wheels (`download.pytorch.org/whl/cpu`). Each tor
 uv sync --no-group cpu --group gpu          # inside clis/<tool>, or --project clis/<tool>
 ```
 
-`cellstudio run <tool> ... --gpu` does this automatically: when an NVIDIA device is present it dispatches with `--no-group cpu --group gpu`; otherwise it warns and keeps CPU torch. Standalone `uv run` users on GPU machines must pass the group flags themselves (plain `uv run` re-syncs back to the cpu group).
+`cellstudio run` picks the group per tool, the same one for every command (`list`/`init`/`exec`) so the env is never re-synced back and forth: `CELLSTUDIO_TORCH=cpu|gpu` if set, else a `.torch-gpu` marker in the tool dir, else NVIDIA detection (`nvidia-smi` must run successfully; the binary alone can exist on GPU-less login nodes). A gpu decision writes the marker, so on a shared filesystem login nodes without a GPU keep dispatching the gpu env after the first GPU-node run; delete the marker (or set `CELLSTUDIO_TORCH=cpu`) to go back. The `exec --gpu` flag only controls runtime device use. Standalone `uv run` users on GPU machines must pass the group flags themselves (plain `uv run` re-syncs back to the cpu group).
 
 ## Adding an algorithm
 

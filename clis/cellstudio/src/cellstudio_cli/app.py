@@ -56,6 +56,41 @@ def find_clis_dir() -> Path:
     raise typer.Exit(1)
 
 
+def _nvidia_gpu_present() -> bool:
+    # nvidia-smi (and /dev/nvidiactl) can exist on GPU-less login nodes; only a
+    # successful query proves a usable device
+    if not shutil.which("nvidia-smi"):
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["nvidia-smi"], capture_output=True, check=False, timeout=10
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _torch_group(tool_dir: Path) -> str:
+    """cpu or gpu, stable across commands so the tool env is not re-synced back and forth.
+
+    CELLSTUDIO_TORCH overrides; a gpu decision is persisted in a marker file so
+    shared-filesystem nodes without a GPU (e.g. cluster login nodes) keep using it.
+    """
+    marker = tool_dir / ".torch-gpu"
+    env = os.environ.get("CELLSTUDIO_TORCH")
+    if env in ("cpu", "gpu"):
+        group = env
+    elif marker.exists() or _nvidia_gpu_present():
+        group = "gpu"
+    else:
+        group = "cpu"
+    if group == "gpu":
+        marker.touch(exist_ok=True)
+    return group
+
+
 def discover_tools() -> dict[str, dict]:
     tools = {}
     for path in sorted(find_clis_dir().iterdir()):
@@ -113,11 +148,11 @@ def run(
         )
         raise typer.Exit(1)
     cmd = ["uv", "run", "--project", str(tools[tool]["dir"])]
-    if "--gpu" in ctx.args and tools[tool]["gpu_groups"]:
-        # switch the tool env to cuda torch, but only where a cuda device exists
-        if shutil.which("nvidia-smi") or Path("/dev/nvidiactl").exists():
+    if tools[tool]["gpu_groups"]:
+        group = _torch_group(tools[tool]["dir"])
+        if group == "gpu":
             cmd += ["--no-group", "cpu", "--group", "gpu"]
-        else:
+        elif "--gpu" in ctx.args:
             typer.secho(
                 "no NVIDIA GPU detected; keeping cpu torch", fg="yellow", err=True
             )
