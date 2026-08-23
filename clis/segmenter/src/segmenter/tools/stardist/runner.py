@@ -28,6 +28,9 @@ def _preload_pip_cuda() -> None:
         libs = failed
         if not libs:
             return
+    print(
+        f"[gpu] {len(libs)} nvidia libs failed to preload: {[so.name for so in libs]}"
+    )
 
 
 def run(cfg: StardistConfig, ctx: RunContext) -> dict:
@@ -35,6 +38,9 @@ def run(cfg: StardistConfig, ctx: RunContext) -> dict:
         import os
 
         os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
+        # zero-noise on success; on failure cudnn prints the actual reason to stderr
+        os.environ.setdefault("CUDNN_LOGERR_DBG", "1")
+        os.environ.setdefault("CUDNN_LOGDEST_DBG", "stderr")
         _preload_pip_cuda()
     else:
         import tensorflow as tf

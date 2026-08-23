@@ -226,6 +226,22 @@ def run(
             )
     cmd += [tool, *ctx.args]
     env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    # cluster cuda/cudnn modules on LD_LIBRARY_PATH outrank the pip wheels' RUNPATHs and
+    # mix library versions inside the tool env; the pip stack is self-contained, drop them
+    if tools[tool]["gpu_groups"] and env.get("LD_LIBRARY_PATH"):
+        kept = [
+            p
+            for p in env["LD_LIBRARY_PATH"].split(":")
+            if not re.search(r"cudnn|cuda", p, re.IGNORECASE)
+        ]
+        dropped = env["LD_LIBRARY_PATH"].count(":") + 1 - len(kept)
+        if dropped:
+            typer.secho(
+                f"dropped {dropped} cuda/cudnn module path(s) from LD_LIBRARY_PATH for {tool}",
+                fg="yellow",
+                err=True,
+            )
+            env["LD_LIBRARY_PATH"] = ":".join(kept)
     raise typer.Exit(subprocess.run(cmd, env=env, check=False).returncode)
 
 
