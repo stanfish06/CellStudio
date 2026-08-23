@@ -4,7 +4,6 @@ pnpm = "latest"
 rust = "latest"
 "cargo:cargo-watch" = "latest"
 uv = "latest"
-python = "3.12"
 node = "22"
 
 [tasks.dev]

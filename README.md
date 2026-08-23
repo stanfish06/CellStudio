@@ -1,2 +1,2 @@
 # CellStudio
-A desktop application for manual cell mask and track correction.
+A desktop application (with a cli wrapper) for manual/auto cell mask and track correction.
