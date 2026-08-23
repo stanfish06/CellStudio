@@ -1,3 +1,4 @@
+import glob as globlib
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +6,7 @@ import tifffile
 
 TIFF_SUFFIXES = {".tif", ".tiff"}
 # formats handled by the installed bioio reader plugins
+# (ims/vsi/oir need the opt-in bioformats extra)
 BIOIO_SUFFIXES = {
     ".tif",
     ".tiff",
@@ -19,6 +21,11 @@ BIOIO_SUFFIXES = {
     ".bmp",
     ".gif",
     ".zarr",
+    ".ims",
+    ".vsi",
+    ".oir",
+    ".lsm",
+    ".stk",
 }
 STACKABLE_SUFFIXES = TIFF_SUFFIXES | BIOIO_SUFFIXES | {".npy"}
 
@@ -29,10 +36,18 @@ def read_image(
     """Read an image/stack from most microscopy formats.
 
     tiff/npy are read raw; everything else goes through bioio (TCZYX, then
-    singleton axes squeezed). A directory is read as sorted files stacked on
-    axis 0. scene/channel select from multi-scene/multi-channel files and
-    force the bioio path even for tiffs.
+    singleton axes squeezed). A directory or a glob pattern (e.g. /data/*.ims)
+    is read as sorted files stacked on axis 0. scene/channel select from
+    multi-scene/multi-channel files and force the bioio path even for tiffs.
     """
+    if globlib.has_magic(str(path)):
+        matches = sorted(Path(p) for p in globlib.glob(str(path)))
+        if not matches:
+            raise FileNotFoundError(f"no files match pattern {path}")
+        if len(matches) == 1:
+            return read_image(matches[0], scene, channel)
+        print(f"[io] pattern {path}: stacking {len(matches)} files on axis 0")
+        return np.stack([read_image(p, scene, channel) for p in matches])
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)

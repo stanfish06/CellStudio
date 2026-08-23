@@ -20,7 +20,7 @@ cellstudio run <tool> exec <config.yaml> [--gpu]  # run (CPU default)
 
 ## IO contract
 
-- segmenter input `io.input.image`: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, or a directory of images (stacked on axis 0): non-tiff formats are read via bioio as TCZYX then squeezed, printing dims, channel names, and pixel sizes. `io.input.scene` / `io.input.channel` (index or name) select from multi-scene/multi-channel files. Output `io.output.masks`: label tiff, 0 = background.
+- segmenter input `io.input.image`: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, a directory, or a glob pattern like /data/*.ims (files stacked on axis 0; quote yaml values starting with *): non-tiff formats are read via bioio as TCZYX then squeezed, printing dims, channel names, and pixel sizes. `io.input.scene` / `io.input.channel` (index or name) select from multi-scene/multi-channel files. Output `io.output.masks`: label tiff, 0 = background.
 - tracker input `io.input.labels`: TYX or TZYX label stack. Outputs: `tracks.csv` (frame, label, track_id, tree_id; centroid mode adds centroid-* columns), laptrack also `splits.csv`/`merges.csv` (parent_track_id, child_track_id), and `tracked_labels.tif` where pixel value = track_id + 1.
 - Relative paths in a config resolve against the cwd of `exec`, not the yaml's location.
 

@@ -25,7 +25,7 @@ ModelType = Literal[
 class MicrosamInput(StrictModel):
     image: Path | None = Field(
         None,
-        description="required: microscopy image: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, or a directory of images (stacked on axis 0)",
+        description="required: microscopy image: tif/ome-tiff, nd2, czi, lif, dv, png/jpg, ome-zarr, npy, a directory, or a glob pattern like '/data/*.ims' (files stacked on axis 0; quote patterns starting with *)",
     )
     scene: int | str | None = Field(
         None,
