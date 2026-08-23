@@ -8,6 +8,7 @@ openspec
 # build output
 .venv/
 .torch-gpu
+.bioformats
 __pycache__/
 node_modules/
 target/

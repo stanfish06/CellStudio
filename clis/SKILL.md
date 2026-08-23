@@ -36,7 +36,7 @@ cellstudio run <tool> exec <config.yaml> [--gpu]  # run (CPU default)
 | laptrack centroid cutoff confusion | default metric is sqeuclidean, so `cutoff` is squared px distance (225 = 15 px max jump) |
 | ultrack rerun errors / leftovers | it keeps a database in `options.data.working_dir` (default `.ultrack/` in cwd); `overwrite: all` is the default |
 | standalone `uv run` on GPU machine uses cpu torch | pass `--no-group cpu --group gpu` to uv; `cellstudio run` handles this itself (NVIDIA detection, persisted in a `.torch-gpu` marker in the tool dir; `CELLSTUDIO_TORCH=cpu\|gpu` overrides) |
-| "no installed reader supports X.vsi/.ims/.oir" | Bio-Formats long tail is opt-in: `uv sync --group bioformats` in clis/segmenter (needs a Java runtime) |
+| ims/vsi/oir/oib inputs | `cellstudio run` auto-enables the segmenter's `bioformats` group when the exec config mentions one (persisted in a `.bioformats` marker); standalone `uv run` users pass `--group bioformats` themselves |
 | segmenting the wrong channel of a multi-channel file | set `io.input.channel` (name or index); the `[io]` log line lists the file's channel names |
 
 ## Extending

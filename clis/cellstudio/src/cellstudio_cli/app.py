@@ -91,6 +91,24 @@ def _torch_group(tool_dir: Path) -> str:
     return group
 
 
+# formats only Bio-Formats can read; a config mentioning one turns on the bioformats group
+_BIOFORMATS_SUFFIXES = (".ims", ".vsi", ".oir", ".oib")
+
+
+def _needs_bioformats(tool_dir: Path, args: list[str]) -> bool:
+    marker = tool_dir / ".bioformats"
+    if marker.exists():
+        return True
+    for arg in args:
+        p = Path(arg)
+        if p.suffix.lower() in (".yaml", ".yml") and p.is_file():
+            text = p.read_text().lower()
+            if any(suffix in text for suffix in _BIOFORMATS_SUFFIXES):
+                marker.touch(exist_ok=True)
+                return True
+    return False
+
+
 def discover_tools() -> dict[str, dict]:
     tools = {}
     for path in sorted(find_clis_dir().iterdir()):
@@ -104,12 +122,13 @@ def discover_tools() -> dict[str, dict]:
         scripts = meta.get("scripts", {})
         if path.name not in scripts:
             continue  # a tool must expose a console script named after its directory
-        groups = data.get("dependency-groups", {})
+        groups = set(data.get("dependency-groups", {}))
         tools[path.name] = {
             "dir": path,
             "description": meta.get("description", ""),
             # cpu/gpu dependency-groups switch between cpu and cuda torch builds
-            "gpu_groups": "cpu" in groups and "gpu" in groups,
+            "gpu_groups": {"cpu", "gpu"} <= groups,
+            "bioformats_group": "bioformats" in groups,
         }
     return tools
 
@@ -148,6 +167,10 @@ def run(
         )
         raise typer.Exit(1)
     cmd = ["uv", "run", "--project", str(tools[tool]["dir"])]
+    if tools[tool]["bioformats_group"] and _needs_bioformats(
+        tools[tool]["dir"], ctx.args
+    ):
+        cmd += ["--group", "bioformats"]
     if tools[tool]["gpu_groups"]:
         group = _torch_group(tools[tool]["dir"])
         if group == "gpu":
