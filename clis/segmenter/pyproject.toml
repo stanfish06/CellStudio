@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "cellpose>=4.2.1.1",
+    "dinov3",
     "cellstudio-cli-core",
     "micro-sam>=1.8.10",
     "stardist>=0.9.2",
@@ -54,6 +55,7 @@ exclude-dependencies = ["pyqt6"]
 
 [tool.uv.sources]
 cellstudio-cli-core = { path = "../core", editable = true }
+dinov3 = { git = "https://github.com/facebookresearch/dinov3" }
 torch = [
     { index = "pytorch-cpu", group = "cpu" },
     { index = "pytorch-cu126", group = "gpu-cu126" },
