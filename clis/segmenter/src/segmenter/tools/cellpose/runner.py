@@ -1,3 +1,4 @@
+import numpy as np
 from cli_core.registry import RunContext
 
 from segmenter.tools.cellpose.config import CellposeConfig
@@ -22,6 +23,9 @@ def run(cfg: CellposeConfig, ctx: RunContext) -> dict:
     eval_kwargs = cfg.options.eval.model_dump()
 
     def predict(image, _source):
+        if cfg.options.per_frame:
+            frames, _flows, _styles = model.eval(list(image), **eval_kwargs)
+            return np.stack(frames)
         masks, _flows, _styles = model.eval(image, **eval_kwargs)
         return masks
 

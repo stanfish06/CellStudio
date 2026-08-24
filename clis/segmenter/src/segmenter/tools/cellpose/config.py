@@ -99,6 +99,10 @@ class CellposeEvalOptions(StrictModel):
 
 class CellposeOptions(StrictModel):
     model: CellposeModelOptions = CellposeModelOptions()
+    per_frame: bool = Field(
+        False,
+        description="treat the first axis as time and segment each frame independently (TZYX: combine with eval.do_3D; z_axis/channel_axis then refer to one frame, e.g. ZYX -> z_axis 0)",
+    )
     eval: CellposeEvalOptions = CellposeEvalOptions()
 
 
