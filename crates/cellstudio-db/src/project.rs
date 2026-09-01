@@ -335,6 +335,13 @@ pub enum DbError {
     LabelIdsExhausted { first: i64, last: i64 },
     #[error("label id {0} is already in use")]
     LabelIdTaken(u32),
+    #[error("track ids are exhausted: the next id would pass the {max} the label overlay can distinguish", max = crate::queries::MAX_LABEL_ID)]
+    TrackIdsExhausted,
+    #[error(
+        "the adopted label store has not been inventoried yet; label-id reservation and mask \
+         writes are refused until the inventory job completes"
+    )]
+    InventoryPending,
 }
 
 impl DbError {

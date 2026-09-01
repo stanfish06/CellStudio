@@ -9,6 +9,7 @@ import {
   isStaleSession,
   type FetchLike,
 } from './client'
+import { ProjectInfo } from './schemas'
 
 const SESSION = 'x-cellstudio-session'
 
@@ -26,6 +27,7 @@ const projectInfo = {
   versions: { sessionId: 'sess-1', image: 1, labels: 0, graph: 0, settings: 0 },
   layout: { hostile: false, amplification: { xy: 1, xz: 3, yz: 3 }, affectedViews: [] },
   hasLabels: false,
+  hasGraph: false,
 }
 
 interface Call {
@@ -125,16 +127,12 @@ describe('ApiClient JSON path', () => {
     await expect(api(500).getProject()).rejects.toBeInstanceOf(ApiError)
   })
 
-  it('reads pixel values and import job ids', async () => {
-    const { fetch, calls } = recorder((url) =>
-      url.includes('/pixel') ? json({ value: 1284 }) : json({ id: 'job-7' }),
-    )
+  it('reads pixel values', async () => {
+    const { fetch, calls } = recorder(() => json({ value: 1284 }))
     const api = new ApiClient({ baseUrl: 'http://127.0.0.1:7777', token: 'tok', fetch })
 
     expect(await api.pixel({ layer: 'image', t: 3, c: 1, z: 2, y: 10, x: 11 })).toBe(1284)
-    expect(await api.startImport('tracks', '/data/tracks.json')).toBe('job-7')
     expect(requireAt(calls, 0).url).toContain('layer=image&t=3&c=1&z=2&y=10&x=11')
-    expect(requireAt(calls, 1).url).toBe('http://127.0.0.1:7777/import/tracks')
   })
 })
 
@@ -381,9 +379,192 @@ describe('ApiClient mask edits', () => {
     await expect(api.deleteMask({ t: 0, label: 1 })).rejects.toBeInstanceOf(NoSessionError)
   })
 
+  // /import/tracks is session-fenced server-side, so the header is not optional
+  it('starts an import with the session header', async () => {
+    const { api, calls } = await opened(() => json({ id: 'job-7' }))
+
+    expect(await api.startImport('tracks', '/data/tracks.json')).toBe('job-7')
+    const call = requireAt(calls, 1)
+    expect(call.url).toBe('http://127.0.0.1:7777/import/tracks')
+    expect(new Headers(call.init?.headers).get(SESSION)).toBe('sess-1')
+  })
+
+  it('refuses to start an import before a session exists', async () => {
+    const { fetch } = recorder(() => json({ id: 'job-7' }))
+    const api = new ApiClient({ baseUrl: 'http://127.0.0.1:7777', token: 'tok', fetch })
+
+    await expect(api.startImport('tracks', '/data/tracks.json')).rejects.toBeInstanceOf(
+      NoSessionError,
+    )
+  })
+
   it('raises StaleSessionError when the backend answers for another session', async () => {
     const { api } = await opened(() => json(editResult, { headers: { [SESSION]: 'sess-2' } }))
 
     await expect(api.undo()).rejects.toBeInstanceOf(StaleSessionError)
+  })
+})
+
+describe('ApiClient graph edits', () => {
+  const graphResult = {
+    domain: 'graph',
+    sessionId: 'sess-1',
+    seq: 9,
+    graphVersion: 4,
+    affectedCells: [
+      {
+        id: 17,
+        t: 3,
+        centroid: [1, 2, 3],
+        area: 40,
+        confidence: null,
+        state: null,
+        trackId: 5,
+        parentId: 12,
+        reviewed: false,
+      },
+    ],
+    affectedTracks: [5],
+  }
+
+  const maskResult = {
+    domain: 'mask',
+    seq: 7,
+    version: 3,
+    sessionId: 'sess-1',
+    hasLabels: true,
+    cells: [],
+    removed: [42],
+    chunks: ['labels/0/0.0.0.0.0'],
+    graphVersion: 4,
+    affectedTracks: [5, 6],
+  }
+
+  async function opened(handler: (url: string, init?: RequestInit) => Response) {
+    const { fetch, calls } = recorder((url, init) =>
+      url.endsWith('/project/open')
+        ? json(projectInfo, { headers: { [SESSION]: 'sess-1' } })
+        : handler(url, init),
+    )
+    const api = new ApiClient({ baseUrl: 'http://127.0.0.1:7777', token: 'tok', fetch })
+    await api.openProject('/data/sample.zarr')
+    return { api, calls }
+  }
+
+  it('posts link and unlink with the session fence and parses the graph result', async () => {
+    const { api, calls } = await opened(() =>
+      json(graphResult, { headers: { [SESSION]: 'sess-1' } }),
+    )
+
+    const linked = await api.link({ parentId: 12, childId: 17 })
+    expect(linked.domain).toBe('graph')
+    expect(linked.graphVersion).toBe(4)
+    expect(linked.affectedCells[0]?.trackId).toBe(5)
+
+    const unlinked = await api.unlink({ cellId: 17 })
+    expect(unlinked.affectedTracks).toEqual([5])
+
+    const [link, unlink] = calls.slice(1)
+    expect(link?.url).toBe('http://127.0.0.1:7777/graph/link')
+    expect(JSON.parse(String(link?.init?.body))).toEqual({ parentId: 12, childId: 17 })
+    expect(new Headers(link?.init?.headers).get(SESSION)).toBe('sess-1')
+    expect(unlink?.url).toBe('http://127.0.0.1:7777/graph/unlink')
+    expect(JSON.parse(String(unlink?.init?.body))).toEqual({ cellId: 17 })
+  })
+
+  it('parses undo and redo as the discriminated union, by domain', async () => {
+    const { api } = await opened((url) =>
+      json(url.endsWith('/undo') ? graphResult : maskResult, {
+        headers: { [SESSION]: 'sess-1' },
+      }),
+    )
+
+    const undone = await api.undo()
+    expect(undone.domain).toBe('graph')
+    if (undone.domain === 'graph') expect(undone.affectedTracks).toEqual([5])
+
+    const redone = await api.redo()
+    if (redone.domain !== 'graph') {
+      expect(redone.removed).toEqual([42])
+      expect(redone.graphVersion).toBe(4)
+      expect(redone.affectedTracks).toEqual([5, 6])
+    } else {
+      throw new Error('expected the mask variant')
+    }
+  })
+
+  it('parses a lineage tree carrying the focus cell the server centred on', async () => {
+    const tree = {
+      rootCellId: 12,
+      focusCellId: 17,
+      cells: graphResult.affectedCells,
+      links: [{ parent: 12, child: 17, confidence: 0.8, reviewed: false }],
+    }
+    const { api } = await opened(() => json(tree, { headers: { [SESSION]: 'sess-1' } }))
+    const lineage = await api.lineage(17)
+    expect(lineage.focusCellId).toBe(17)
+    expect(lineage.rootCellId).toBe(12)
+
+    const { api: bare } = await opened(() =>
+      json({ ...tree, focusCellId: undefined }, { headers: { [SESSION]: 'sess-1' } }),
+    )
+    await expect(bare.lineage(17)).rejects.toBeInstanceOf(SchemaError)
+  })
+
+  it('threads an abort signal through cellsWindow', async () => {
+    const { api, calls } = await opened(() => json([], { headers: { [SESSION]: 'sess-1' } }))
+
+    const controller = new AbortController()
+    await api.cellsWindow({ t0: 0, t1: 4 }, controller.signal)
+    expect(calls[1]?.init?.signal).toBe(controller.signal)
+
+    controller.abort()
+    const { api: aborted } = await opened((_url, init) => {
+      if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+      return json([])
+    })
+    await expect(aborted.cellsWindow({ t0: 0, t1: 4 }, controller.signal)).rejects.toThrow(/abort/i)
+  })
+})
+
+describe('ApiClient tracking export', () => {
+  async function opened(handler: (url: string, init?: RequestInit) => Response) {
+    const { fetch, calls } = recorder((url, init) =>
+      url.endsWith('/project/open')
+        ? json(projectInfo, { headers: { [SESSION]: 'sess-1' } })
+        : handler(url, init),
+    )
+    const api = new ApiClient({ baseUrl: 'http://127.0.0.1:7777', token: 'tok', fetch })
+    await api.openProject('/data/sample.zarr')
+    return { api, calls }
+  }
+
+  it('posts the export with the session fence and parses the JobRef', async () => {
+    const { api, calls } = await opened(() =>
+      json({ id: 'job-9' }, { headers: { [SESSION]: 'sess-1' } }),
+    )
+
+    const job = await api.exportTracks()
+    expect(job.id).toBe('job-9')
+
+    const call = requireAt(calls, 1)
+    expect(call.url).toBe('http://127.0.0.1:7777/export/tracks')
+    expect(call.init?.method).toBe('POST')
+    expect(new Headers(call.init?.headers).get(SESSION)).toBe('sess-1')
+  })
+
+  it('refuses to export before any session exists', async () => {
+    const { fetch } = recorder(() => json({ id: 'job-9' }))
+    const api = new ApiClient({ baseUrl: 'http://127.0.0.1:7777', token: 'tok', fetch })
+
+    await expect(api.exportTracks()).rejects.toBeInstanceOf(NoSessionError)
+  })
+
+  it('parses ProjectInfo with and without the graph summary', () => {
+    expect(ProjectInfo.parse({ ...projectInfo, hasGraph: true }).hasGraph).toBe(true)
+
+    // the field is optional so pre-existing constructors stay valid
+    const { hasGraph: _hasGraph, ...withoutGraph } = projectInfo
+    expect(ProjectInfo.parse(withoutGraph).hasGraph).toBeUndefined()
   })
 })

@@ -53,6 +53,7 @@ fn project_info_matches_the_typescript_schema() {
             "channels",
             "dims",
             "dtype",
+            "hasGraph",
             "hasLabels",
             "layout",
             "levels",

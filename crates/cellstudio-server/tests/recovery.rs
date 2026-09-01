@@ -15,8 +15,8 @@ use cellstudio_core::labels::{
 };
 use cellstudio_core::reader::ImageReader;
 use cellstudio_db::Project;
-use cellstudio_db::queries::{ChunkSnapshot, EditDomain, ExtentDelta};
-use cellstudio_server::edit::{MaskCommand, ProjectEditCoordinator, Stroke};
+use cellstudio_db::queries::{ChunkSnapshot, EditDomain, ExtentDelta, GraphStep};
+use cellstudio_server::edit::{EditCommand, MaskCommand, ProjectEditCoordinator, Stroke};
 use cellstudio_server::events::EventBus;
 use serde_json::{Value, json};
 use support::{data_copy, store_snapshot};
@@ -52,7 +52,7 @@ impl Harness {
             .execute(
                 &image,
                 SESSION,
-                MaskCommand::Stroke(Stroke {
+                EditCommand::Mask(MaskCommand::Stroke(Stroke {
                     t: 0,
                     label: first,
                     erase: false,
@@ -60,7 +60,7 @@ impl Harness {
                     plane: Some(Axis::Z),
                     stamps: vec![[1.5, 8.5, 8.5]],
                     only: None,
-                }),
+                })),
             )
             .expect("the first stroke commits");
 
@@ -273,7 +273,13 @@ fn an_edit_whose_final_transaction_committed_survives_recovery() {
     let commit = harness
         .project
         .db
-        .commit_edit(seq, CRASH_T, &deltas_of(&footprint), &[])
+        .commit_edit(
+            seq,
+            CRASH_T,
+            &deltas_of(&footprint),
+            &[],
+            GraphStep::Rematerialize,
+        )
         .expect("commit");
     let committed = harness.snapshot();
 

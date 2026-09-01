@@ -2,11 +2,21 @@ import { describe, expect, it } from 'vitest'
 import { VolumeScene, rayBoxInterval } from './volumeScene'
 import { GpuBudget } from '../data/gpuBudget'
 import { VolumeCache } from '../data/volumeCache'
+import { RemapCache } from '../data/trackFrame'
 import { TrackSource } from '../data/trackSource'
 import { fitVolume } from '../data/world'
 import { MaskEditor } from '../edit/maskEditor'
 import { PerfMonitor } from '../perf'
-import { FakeApi, cell, devProject, layerProps, makeVolume, navSnapshot } from '../test/data'
+import {
+  FakeApi,
+  cell,
+  devProject,
+  layerProps,
+  makeVolume,
+  navSnapshot,
+  type VolumeCall,
+} from '../test/data'
+import type { VolumeBuffer } from '@cellstudio/api-client'
 import type { PickingInfo } from '@deck.gl/core'
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
@@ -263,7 +273,7 @@ describe('VolumeScene label overlay', () => {
     const { api, volumes, budget, labelVolumes, editor } = labelSetup()
     const scene = new VolumeScene({ volumes, labelVolumes, editor, budget })
     // The overlay is not in the image token and toggling it bumps no generation, so the
-    // early return would evict nothing and request nothing (design M16).
+    // early return would evict nothing and request nothing.
     scene.update(navSnapshot(project, { activeView: '3d', t: 5, labels: OFF }))
     await settle()
     const images = api.volumeCalls.filter((c) => c.q.layer === 'image').length
@@ -282,6 +292,75 @@ describe('VolumeScene label overlay', () => {
     await settle()
     expect(api.volumeCalls.every((c) => c.q.layer === 'image')).toBe(true)
     expect(scene.layers().some((l) => l.id === 'volume-labels')).toBe(false)
+  })
+})
+
+/** Label volumes filled with one id, so the remap output is observable. */
+class LabelVolumeApi extends FakeApi {
+  labelFill = 0
+
+  override volume(q: VolumeCall['q'], signal?: AbortSignal): Promise<VolumeBuffer> {
+    return super.volume(q, signal).then((volume) => {
+      if (q.layer === 'labels') new Uint32Array(volume.data).fill(this.labelFill)
+      return volume
+    })
+  }
+}
+
+describe('VolumeScene track-colored labels.', () => {
+  const project = devProject({ hasLabels: true, hasGraph: true })
+
+  const trackedSetup = () => {
+    const api = new LabelVolumeApi()
+    api.labelFill = 42
+    api.cells = [cell(42, 5, [1, 10, 20], 9)]
+    const volumes = new VolumeCache({ api, maxConcurrent: 8 })
+    const labelVolumes = new VolumeCache({ api, maxConcurrent: 8 })
+    const editor = new MaskEditor({ api, onCommit: () => {} })
+    editor.configure({ dims: [3, 1024, 1024], scale: null, storePresent: true })
+    const budget = new GpuBudget({
+      totalBytes: 512 * 1024 * 1024,
+      volumeCeilingBytes: 8 * 1024 * 1024,
+    })
+    const scene = new VolumeScene({
+      volumes,
+      labelVolumes,
+      editor,
+      budget,
+      tracks: new TrackSource(api),
+      remaps: new RemapCache(),
+    })
+    return { api, scene }
+  }
+
+  it('remaps the label volume to track ids and translates the selected id', async () => {
+    const { scene } = trackedSetup()
+    scene.update(
+      navSnapshot(project, { activeView: '3d', t: 5, labels: ON, selection: { cellId: 42 } }),
+    )
+    await settle()
+    const labels = layerProps(scene.layers().find((l) => l.id === 'volume-labels'))
+    const channelData = labels.channelData as { data: (Uint32Array | Float32Array)[] }
+    expect(channelData.data[0]?.[0]).toBe(9)
+    expect(labels.selectedLabel).toBe(9)
+  })
+
+  it('passes the fade bounds through to the 3D track layer', async () => {
+    const { scene } = trackedSetup()
+    const fade = { on: false, max: 0.7, min: 0.1 }
+    scene.update(navSnapshot(project, { activeView: '3d', t: 5, tracks: { fade } }))
+    await settle()
+    const overlay = layerProps(scene.layers().find((l) => l.id === 'volume-tracks'))
+    expect(overlay.fade).toEqual(fade)
+  })
+
+  // the volume writes depth; without this the overlay inside the box is invisible
+  it('draws the 3D overlay with the depth comparison disabled', async () => {
+    const { scene } = trackedSetup()
+    scene.update(navSnapshot(project, { activeView: '3d', t: 5 }))
+    await settle()
+    const overlay = layerProps(scene.layers().find((l) => l.id === 'volume-tracks'))
+    expect(overlay.parameters).toEqual({ depthCompare: 'always', depthWriteEnabled: false })
   })
 })
 

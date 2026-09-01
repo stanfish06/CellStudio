@@ -31,6 +31,8 @@ pub struct CellRow {
     pub detection_confidence: Option<f64>,
     pub state: Option<CellState>,
     pub track_id: Option<u32>,
+    /// The cell this one descends from, when the graph has a link into it.
+    pub parent_id: Option<u32>,
     pub src_id: Option<u32>,
     pub seg_id: Option<u32>,
     pub labels: Vec<String>,
@@ -121,7 +123,7 @@ pub struct EditEntry {
     pub scope: Option<String>,
     pub undone: bool,
     /// False once the row's chunk snapshots have been pruned: the history shows it, undo
-    /// declines it (design M7).
+    /// declines it.
     pub undoable: bool,
 }
 
@@ -206,11 +208,26 @@ pub struct EditRecord {
 }
 
 /// What `commit_edit` records in `edits.inverse` so the edit can be undone: the forward
-/// deltas negated, and the cells it removed with their links.
+/// deltas negated, the cells it removed with their links, and — when the edit changed the
+/// graph — the exact identity delta, preserved verbatim across undo/redo cycles.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MaskInverse {
     pub deltas: Vec<ExtentDelta>,
     pub cells: Vec<CellSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::graph::GraphDelta>,
+}
+
+/// How a mask commit interacts with the graph. a fresh commit re-materializes
+/// the neighbors of any removed cells; a journaled step reapplies the stored delta exactly.
+#[derive(Debug, Clone, Copy)]
+pub enum GraphStep<'a> {
+    /// Fresh forward commit: cut links, re-materialize neighbors, journal the delta.
+    Rematerialize,
+    /// Redo of a journaled row: reapply its delta's after-assignments.
+    Redo(Option<&'a crate::graph::GraphDelta>),
+    /// Undo of a journaled row: apply its delta's before-assignments.
+    Undo(Option<&'a crate::graph::GraphDelta>),
 }
 
 fn negate_delta(delta: &ExtentDelta) -> ExtentDelta {
@@ -225,24 +242,30 @@ fn negate_delta(delta: &ExtentDelta) -> ExtentDelta {
     }
 }
 
-/// The result of the commit transaction of design M6 step 5.
+/// The result of a commit transaction.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EditCommit {
     pub version: u64,
     pub cells: Vec<CellChange>,
+    /// `version.graph` after the commit, when the edit changed the graph.
+    pub graph_version: Option<u64>,
+    /// The identity delta the commit applied or journaled, for event fan-out.
+    pub graph: Option<crate::graph::GraphDelta>,
 }
 
 const CELLS_WINDOW_SQL: &str = "\
 SELECT id, t, z, y, x, area, detection_confidence, state, track_id, src_id, seg_id,
-       labels, features, reviewed
+       labels, features, reviewed,
+       (SELECT parent FROM links WHERE child = cells.id LIMIT 1)
   FROM cells
  WHERE t >= ?1 AND t <= ?2
    AND (?3 = 0 OR (z BETWEEN ?4 AND ?5 AND y BETWEEN ?6 AND ?7 AND x BETWEEN ?8 AND ?9))
  ORDER BY t, id";
 
-const CELL_BY_ID_SQL: &str = "\
+pub(crate) const CELL_BY_ID_SQL: &str = "\
 SELECT id, t, z, y, x, area, detection_confidence, state, track_id, src_id, seg_id,
-       labels, features, reviewed
+       labels, features, reviewed,
+       (SELECT parent FROM links WHERE child = cells.id LIMIT 1)
   FROM cells
  WHERE id = ?1";
 
@@ -430,10 +453,10 @@ RETURNING seq";
 /// 0 is background; it never gets a `cells` row.
 const BACKGROUND: u32 = 0;
 
-/// viv hands the fragment shader a float, so ids stay distinguishable only to 2²⁴ (design M14).
+/// viv hands the fragment shader a float, so ids stay distinguishable only to 2²⁴.
 pub const MAX_LABEL_ID: u32 = (1 << 24) - 1;
 
-const NEXT_ID_KEY: &str = "labels.next_id";
+pub(crate) const NEXT_ID_KEY: &str = "labels.next_id";
 
 const EXTENT_SQL: &str = "\
 SELECT z0, z1, y0, y1, x0, x1, area, sum_z, sum_y, sum_x
@@ -464,8 +487,8 @@ ON CONFLICT(id) DO UPDATE SET
 
 impl Db {
     /// Journals a mask edit with `pending = 1` and its chunk snapshots in one transaction, so
-    /// no chunk is ever written without a record of what it was (design M6 step 2). Clears the
-    /// redo stack in the same transaction — a new edit invalidates every re-executable row (M7).
+    /// no chunk is ever written without a record of what it was. Clears the
+    /// redo stack in the same transaction — a new edit invalidates every re-executable row.
     pub fn record_edit_pending(
         &self,
         domain: EditDomain,
@@ -525,7 +548,7 @@ RETURNING seq";
     }
 
     /// Drops the snapshots of every mask edit older than the newest `keep`. Their history rows
-    /// stay and report `undoable = false` (design M7).
+    /// stay and report `undoable = false`.
     pub fn prune_blobs(&self, keep: u32) -> Result<u64, DbError> {
         const SQL: &str = "\
 DELETE FROM edit_blobs WHERE seq NOT IN (
@@ -546,7 +569,7 @@ DELETE FROM edit_blobs WHERE seq NOT IN (
         Ok(records)
     }
 
-    /// The newest committed edit that has not been undone, whatever its domain (design M7).
+    /// The newest committed edit that has not been undone, whatever its domain.
     pub fn undo_next(&self) -> Result<Option<EditRecord>, DbError> {
         self.edit_at("pending = 0 AND undone = 0", "seq DESC")
     }
@@ -585,7 +608,7 @@ DELETE FROM edit_blobs WHERE seq NOT IN (
         Ok(())
     }
 
-    /// The recorded extent of `(t, label)`, whose bbox bounds the delete scan (design M18).
+    /// The recorded extent of `(t, label)`, whose bbox bounds the delete scan.
     pub fn extent_of(&self, t: u64, label: u32) -> Result<Option<ExtentRow>, DbError> {
         let conn = self.conn()?;
         extent_in(&conn, t, label)
@@ -593,7 +616,7 @@ DELETE FROM edit_blobs WHERE seq NOT IN (
 
     /// Seeds `mask_extent` for `(t, label)` from `scan` when the row is missing, so a label
     /// this session did not paint gets its exact area and centroid once instead of counting
-    /// only this session's voxels (design M17). Returns whether `scan` ran.
+    /// only this session's voxels Returns whether `scan` ran.
     ///
     /// `scan` is the caller's `labels::scan_label`: the database never reads the label store.
     /// The connection is not held while it runs.
@@ -616,7 +639,7 @@ DELETE FROM edit_blobs WHERE seq NOT IN (
     }
 
     /// Folds the rasterizer's voxel delta into `mask_extent` and rewrites the affected
-    /// `cells` rows from the resulting sums (design M17).
+    /// `cells` rows from the resulting sums.
     pub fn apply_extent_delta(
         &self,
         t: u64,
@@ -630,14 +653,15 @@ DELETE FROM edit_blobs WHERE seq NOT IN (
     }
 
     /// Design M6 step 5, as one transaction: the restored rows of an undo, the stats and cell
-    /// changes, `pending = 0`, and the `version.labels` bump. Bumping outside it would
-    /// advertise an edit whose derived rows are not committed.
+    /// changes,the`pending = 0`, and the version bump(s). Bumping
+    /// outside it would advertise an edit whose derived rows are not committed.
     pub fn commit_edit(
         &self,
         seq: i64,
         t: u64,
         deltas: &[ExtentDelta],
         restore: &[CellSnapshot],
+        graph: GraphStep<'_>,
     ) -> Result<EditCommit, DbError> {
         let mut guard = self.conn()?;
         let tx = guard.transaction()?;
@@ -645,29 +669,82 @@ DELETE FROM edit_blobs WHERE seq NOT IN (
             restore_cell_in(&tx, snapshot)?;
         }
         let cells = apply_deltas_in(&tx, t, deltas)?;
-        // written here, in the commit transaction: a durable edit is always undoable
+
+        let removed: Vec<&CellSnapshot> = cells
+            .iter()
+            .filter_map(|change| match change {
+                CellChange::Removed(snapshot) => Some(snapshot),
+                CellChange::Updated(_) => None,
+            })
+            .collect();
+        let graph_delta = match graph {
+            GraphStep::Rematerialize => {
+                let removed_ids: HashSet<u32> = removed.iter().map(|s| s.cell.id).collect();
+                let mut removed_links: Vec<LinkRow> = removed
+                    .iter()
+                    .flat_map(|s| s.links.iter().copied())
+                    .collect();
+                removed_links.sort_by_key(|l| (l.parent, l.child));
+                removed_links.dedup_by_key(|l| (l.parent, l.child));
+                let seeds: Vec<u32> = removed_links
+                    .iter()
+                    .flat_map(|l| [l.parent, l.child])
+                    .filter(|id| !removed_ids.contains(id))
+                    .collect();
+                let (before, after) =
+                    crate::graph::rematerialize(&tx, &seeds, &[], &removed_links)?;
+                let delta = crate::graph::GraphDelta {
+                    added_links: Vec::new(),
+                    removed_links,
+                    track_ids_before: before,
+                    track_ids_after: after,
+                };
+                (!delta.is_empty()).then_some(delta)
+            }
+            GraphStep::Redo(delta) => {
+                if let Some(delta) = delta {
+                    crate::graph::apply_assignments(&tx, &delta.track_ids_after)?;
+                }
+                delta.cloned()
+            }
+            GraphStep::Undo(delta) => {
+                if let Some(delta) = delta {
+                    crate::graph::apply_assignments(&tx, &delta.track_ids_before)?;
+                }
+                delta.cloned()
+            }
+        };
+
+        // written here, in the commit transaction: a durable edit is always undoable, and the
+        // graph delta rides along verbatim so redo reapplies exact identities
         let inverse = MaskInverse {
             deltas: deltas.iter().map(negate_delta).collect(),
-            cells: cells
-                .iter()
-                .filter_map(|change| match change {
-                    CellChange::Removed(snapshot) => Some(snapshot.clone()),
-                    CellChange::Updated(_) => None,
-                })
-                .collect(),
+            cells: removed.iter().map(|s| (*s).clone()).collect(),
+            graph: graph_delta.clone(),
         };
         tx.execute(
             "UPDATE edits SET inverse = ?2, pending = 0 WHERE seq = ?1",
             rusqlite::params![seq, serde_json::to_string(&inverse).map_err(DbError::Json)?],
         )?;
+        // removing or restoring a cell changes the graph's node set even without links
+        let graph_changed = graph_delta.is_some() || !removed.is_empty() || !restore.is_empty();
         let version = bump_in(&tx, VersionCounter::Labels)?;
+        let graph_version = match graph_changed {
+            true => Some(bump_in(&tx, VersionCounter::Graph)?),
+            false => None,
+        };
         tx.commit()?;
-        Ok(EditCommit { version, cells })
+        Ok(EditCommit {
+            version,
+            cells,
+            graph_version,
+            graph: graph_delta,
+        })
     }
 
     /// Reserves `count` consecutive label ids and returns the first. The counter starts past
     /// every id already in `cells` or `mask_labels`, so a store this session did not write
-    /// never has one of its ids handed out again (design M10).
+    /// never has one of its ids handed out again.
     pub fn reserve_label_ids(&self, count: u32) -> Result<u32, DbError> {
         const IN_USE_SQL: &str = "\
 SELECT id FROM cells WHERE id BETWEEN ?1 AND ?2
@@ -680,6 +757,11 @@ SELECT MAX(m) FROM (SELECT COALESCE(MAX(id), 0) AS m FROM cells
 
         let mut guard = self.conn()?;
         let tx = guard.transaction()?;
+        // an adopted store's ids are unknown until its inventory commits; handing one out
+        // here could re-issue a live id.
+        if crate::inventory::pending_in(&tx)? {
+            return Err(DbError::InventoryPending);
+        }
         let seed: i64 = tx.query_row(SEED_SQL, [], |row| row.get(0))?;
         let stored: Option<i64> = tx
             .query_row(
@@ -753,7 +835,7 @@ fn put_blob_in(conn: &Connection, seq: i64, blob: &ChunkSnapshot) -> Result<(), 
     Ok(())
 }
 
-fn clear_redo_in(conn: &Connection) -> Result<u64, DbError> {
+pub(crate) fn clear_redo_in(conn: &Connection) -> Result<u64, DbError> {
     conn.execute(
         "DELETE FROM edit_blobs WHERE seq IN (SELECT seq FROM edits WHERE undone = 1)",
         [],
@@ -838,7 +920,7 @@ fn write_extent_in(
 }
 
 /// `cells.id` is the primary key and equals the voxel value, so a row that exists at another
-/// `t` may not be reused: an upsert would move the cell and orphan its voxels (design M17).
+/// `t` may not be reused: an upsert would move the cell and orphan its voxels.
 fn check_frame(conn: &Connection, t: u64, label: u32) -> Result<(), DbError> {
     let existing: Option<i64> = conn
         .query_row("SELECT t FROM cells WHERE id = ?1", [label], |row| {
@@ -961,7 +1043,7 @@ fn remove_cell_in(conn: &Connection, t: u64, label: u32) -> Result<Option<CellCh
     Ok(Some(CellChange::Removed(CellSnapshot { cell, links })))
 }
 
-fn links_of(conn: &Connection, id: u32) -> Result<Vec<LinkRow>, DbError> {
+pub(crate) fn links_of(conn: &Connection, id: u32) -> Result<Vec<LinkRow>, DbError> {
     const SQL: &str = "\
 SELECT parent, child, confidence, reviewed FROM links WHERE parent = ?1 OR child = ?1
  ORDER BY parent, child";
@@ -1029,7 +1111,7 @@ RETURNING CAST(value AS INTEGER)";
     Ok(value.max(0) as u64)
 }
 
-fn cell_row(row: &Row<'_>) -> Result<CellRow, DbError> {
+pub(crate) fn cell_row(row: &Row<'_>) -> Result<CellRow, DbError> {
     let z: Option<f64> = row.get(2)?;
     let y: Option<f64> = row.get(3)?;
     let x: Option<f64> = row.get(4)?;
@@ -1052,6 +1134,7 @@ fn cell_row(row: &Row<'_>) -> Result<CellRow, DbError> {
         labels: parse_labels(row.get::<_, Option<String>>(11)?)?,
         features: parse_features(row.get::<_, Option<String>>(12)?)?,
         reviewed: row.get::<_, i64>(13)? != 0,
+        parent_id: row.get::<_, Option<i64>>(14)?.map(to_u32).transpose()?,
     })
 }
 
@@ -1077,11 +1160,11 @@ fn scope_of(op: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn to_u32(value: i64) -> Result<u32, DbError> {
+pub(crate) fn to_u32(value: i64) -> Result<u32, DbError> {
     u32::try_from(value).map_err(|_| DbError::OutOfRange(value))
 }
 
-fn to_u64(value: i64) -> Result<u64, DbError> {
+pub(crate) fn to_u64(value: i64) -> Result<u64, DbError> {
     u64::try_from(value).map_err(|_| DbError::OutOfRange(value))
 }
 
@@ -1169,6 +1252,13 @@ INSERT INTO links(parent, child, confidence, reviewed) VALUES
         assert_eq!(cell.labels, vec!["ESI".to_string()]);
         assert_eq!(cell.features.get("area").and_then(Value::as_i64), Some(100));
         assert!(!cell.reviewed);
+        assert_eq!(cell.parent_id, None, "a root has no parent");
+        let daughters = project.db.cells_window(3, 3, None).expect("window");
+        assert_eq!(
+            daughters.iter().map(|c| c.parent_id).collect::<Vec<_>>(),
+            vec![Some(3), Some(3)],
+            "both daughters of the division at t = 2 name cell 3"
+        );
     }
 
     #[test]

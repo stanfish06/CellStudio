@@ -50,6 +50,18 @@ ipcMain.handle(IPC.openDataset, async () => {
   return result.canceled ? null : (result.filePaths[0] ?? null)
 })
 
+ipcMain.handle(IPC.openTracking, async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Import tracking data',
+    properties: ['openFile'],
+    filters: [
+      { name: 'CellStudio tracking', extensions: ['json', 'gz'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+  })
+  return result.canceled ? null : (result.filePaths[0] ?? null)
+})
+
 void app.whenReady().then(async () => {
   supervisor = new BackendSupervisor({ onState: broadcast })
   createWindow()

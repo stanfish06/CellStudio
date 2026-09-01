@@ -12,6 +12,7 @@ use crate::events::{Event, EventBus};
 pub enum JobKind {
     Rechunk,
     Proxy,
+    Inventory,
     ImportTracks,
     ImportLabels,
     Export,

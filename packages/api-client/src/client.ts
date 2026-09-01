@@ -17,18 +17,22 @@
 //   GET  /volume            ?layer&t&c&level                    -> binary volume
 //   GET  /pixel             ?layer&t&c&z&y&x                    -> {"value": number}
 //   GET  /histogram         ?layer&t&c                          -> Histogram
-//   GET  /cells             ?t0&t1&bbox=y0,y1,x0,x1             -> CellRow[]
+//   GET  /cells             ?t0&t1&bbox=y0,y1,x0,x1             -> CellRow[] (abortable)
 //   GET  /lineage           ?cell                               -> LineageTree
 //   GET  /jobs                                                  -> JobState[]
 //   POST /import/{kind}     {"path": string}                    -> {"id": string}
+//   POST /export/tracks     no body                             -> {"id": string}
 //   GET  /settings                                              -> opaque JSON object
 //   PUT  /settings          opaque JSON object                  -> 2xx, body ignored
 //   GET  /edits             ?limit                              -> EditEntry[]
 //   POST /mask/reserve      {"count": number}                   -> LabelLease
 //   POST /mask/stroke       StrokeBody                          -> MaskEditResult
 //   POST /mask/delete       DeleteMaskBody                      -> MaskEditResult
-//   POST /edits/undo        no body                             -> MaskEditResult
-//   POST /edits/redo        no body                             -> MaskEditResult
+//   POST /graph/link        {"parentId", "childId"}             -> GraphEditResult
+//   POST /graph/unlink      {"cellId"}                          -> GraphEditResult
+//   POST /graph/cut         {"parentId","childId"}              -> GraphEditResult
+//   POST /edits/undo        no body                             -> EditResult (by domain)
+//   POST /edits/redo        no body                             -> EditResult (by domain)
 //   GET  /ws-ticket                                             -> {"ticket": string}
 //
 // Mutations additionally send x-cellstudio-session with the session the client believes it
@@ -39,6 +43,8 @@ import {
   CellRow,
   Dtype,
   EditEntry,
+  EditResult,
+  GraphEditResult,
   Histogram,
   JobState,
   LabelLease,
@@ -48,8 +54,10 @@ import {
   type Bbox,
   type DeleteMaskBody,
   type LayerId,
+  type LinkBody,
   type PlaneBuffer,
   type StrokeBody,
+  type UnlinkBody,
   type VolumeBuffer,
 } from './schemas'
 
@@ -246,9 +254,12 @@ export class ApiClient {
     return this.#json(Histogram, '/histogram', { query: { ...q } })
   }
 
-  cellsWindow(q: CellsQuery): Promise<CellRow[]> {
+  cellsWindow(q: CellsQuery, signal?: AbortSignal): Promise<CellRow[]> {
     const bbox = q.bbox ? `${q.bbox.y0},${q.bbox.y1},${q.bbox.x0},${q.bbox.x1}` : undefined
-    return this.#json(z.array(CellRow), '/cells', { query: { t0: q.t0, t1: q.t1, bbox } })
+    return this.#json(z.array(CellRow), '/cells', {
+      query: { t0: q.t0, t1: q.t1, bbox },
+      signal,
+    })
   }
 
   lineage(cellId: number): Promise<LineageTree> {
@@ -276,17 +287,40 @@ export class ApiClient {
     return this.#json(MaskEditResult, '/mask/delete', { method: 'POST', body, fence: true })
   }
 
-  undo(): Promise<MaskEditResult> {
-    return this.#json(MaskEditResult, '/edits/undo', { method: 'POST', fence: true })
+  link(body: LinkBody): Promise<GraphEditResult> {
+    return this.#json(GraphEditResult, '/graph/link', { method: 'POST', body, fence: true })
   }
 
-  redo(): Promise<MaskEditResult> {
-    return this.#json(MaskEditResult, '/edits/redo', { method: 'POST', fence: true })
+  /** Cuts one link, splitting its track; `unlink` deletes a whole one. */
+  cut(body: LinkBody): Promise<GraphEditResult> {
+    return this.#json(GraphEditResult, '/graph/cut', { method: 'POST', body, fence: true })
+  }
+
+  unlink(body: UnlinkBody): Promise<GraphEditResult> {
+    return this.#json(GraphEditResult, '/graph/unlink', { method: 'POST', body, fence: true })
+  }
+
+  /** The journal row's domain decides the variant; dispatch on `result.domain`. */
+  undo(): Promise<EditResult> {
+    return this.#json(EditResult, '/edits/undo', { method: 'POST', fence: true })
+  }
+
+  redo(): Promise<EditResult> {
+    return this.#json(EditResult, '/edits/redo', { method: 'POST', fence: true })
   }
 
   async startImport(kind: 'tracks' | 'labels', path: string): Promise<JobId> {
-    const { id } = await this.#json(JobRef, `/import/${kind}`, { method: 'POST', body: { path } })
+    const { id } = await this.#json(JobRef, `/import/${kind}`, {
+      method: 'POST',
+      body: { path },
+      fence: true,
+    })
     return id
+  }
+
+  /** Starts the tracking snapshot job; the job's completion message carries the written path. */
+  exportTracks(): Promise<JobRef> {
+    return this.#json(JobRef, '/export/tracks', { method: 'POST', fence: true })
   }
 
   getSettings(): Promise<Settings> {
@@ -395,6 +429,7 @@ export class ApiClient {
 
 const PixelValue = z.object({ value: z.number() })
 const JobRef = z.object({ id: z.string() })
+export type JobRef = z.infer<typeof JobRef>
 const WsTicket = z.object({ ticket: z.string() })
 const SettingsSchema = z.record(z.string(), z.unknown())
 

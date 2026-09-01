@@ -76,7 +76,9 @@ impl ApiError {
                 DbError::AlreadyOpen(_)
                 | DbError::LabelFrameConflict { .. }
                 | DbError::LabelIdTaken(_)
-                | DbError::LabelIdsExhausted { .. } => StatusCode::CONFLICT,
+                | DbError::LabelIdsExhausted { .. }
+                | DbError::TrackIdsExhausted
+                | DbError::InventoryPending => StatusCode::CONFLICT,
                 _ => StatusCode::INTERNAL_SERVER_ERROR,
             },
             ApiError::Proxy(_) | ApiError::Rechunk(_) | ApiError::Internal(_) => {
@@ -111,7 +113,13 @@ impl From<EditError> for ApiError {
                 ApiError::Conflict(e.to_string())
             }
             EditError::NoStore(_) => ApiError::NotFound(e.to_string()),
-            EditError::GraphDomain(_) => ApiError::NotImplemented(e.to_string()),
+            // structured graph rejections leave the graph unchanged; the reason reaches the
+            // status bar verbatim
+            EditError::Graph(g) => match g {
+                cellstudio_db::GraphError::UnknownCell(_) => ApiError::NotFound(g.to_string()),
+                cellstudio_db::GraphError::Db(db) => ApiError::Db(db),
+                _ => ApiError::Conflict(g.to_string()),
+            },
             EditError::Db(db) => ApiError::Db(db),
             EditError::Dataset(source) => ApiError::Dataset(source),
             EditError::Labels(_) | EditError::Journal { .. } => ApiError::Internal(e.to_string()),

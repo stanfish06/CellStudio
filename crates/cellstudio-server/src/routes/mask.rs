@@ -1,5 +1,5 @@
 //! Mask edits. Every route here fences on the session header before the active project is
-//! resolved or any lock is taken (design M20), translates wire types, and hands the work to
+//! resolved or any lock is taken., translates wire types, and hands the work to
 //! [`ProjectEditCoordinator`]; none of them reproduces the write ordering.
 
 use std::sync::Arc;
@@ -13,11 +13,11 @@ use cellstudio_core::axes::Axis;
 use serde::Deserialize;
 
 use crate::auth::json_body;
-use crate::edit::{MaskCommand, RESERVE_DEFAULT, Stroke};
+use crate::edit::{EditCommand, MaskCommand, RESERVE_DEFAULT, Stroke};
 use crate::error::{ApiError, ApiResult};
 use crate::routes::project::session_json;
 use crate::state::{ActiveProject, AppState};
-use crate::wire::{LabelLeaseWire, MaskEditWire, SESSION_HEADER};
+use crate::wire::{EditResultWire, LabelLeaseWire, SESSION_HEADER};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,7 +59,7 @@ pub struct DeleteBody {
 }
 
 /// Advances the id counter and nothing else: selecting the brush on a project the user never
-/// paints leaves no store behind (design M1, M10).
+/// paints leaves no store behind.
 pub async fn reserve(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -85,7 +85,7 @@ pub async fn stroke(
 ) -> ApiResult<Response> {
     let active = fenced(&state, &headers)?;
     let body = json_body(body)?;
-    let command = MaskCommand::Stroke(Stroke {
+    let command = EditCommand::Mask(MaskCommand::Stroke(Stroke {
         t: body.t,
         label: body.label,
         erase: body.mode == MaskMode::Erase,
@@ -98,7 +98,7 @@ pub async fn stroke(
         },
         stamps: body.stamps,
         only: body.only,
-    });
+    }));
     run(&state, active, command).await
 }
 
@@ -112,10 +112,10 @@ pub async fn delete(
     run(
         &state,
         active,
-        MaskCommand::Delete {
+        EditCommand::Mask(MaskCommand::Delete {
             t: body.t,
             label: body.label,
-        },
+        }),
     )
     .await
 }
@@ -123,17 +123,20 @@ pub async fn delete(
 pub async fn run(
     state: &Arc<AppState>,
     active: Arc<ActiveProject>,
-    command: MaskCommand,
+    command: EditCommand,
 ) -> ApiResult<Response> {
     let session = active.session_id.clone();
-    let commit = state
+    let outcome = state
         .io(move || {
             Ok(active
                 .coordinator
                 .execute(&active.image, &active.session_id, command)?)
         })
         .await?;
-    Ok(session_json(&session, MaskEditWire::new(&session, commit)))
+    Ok(session_json(
+        &session,
+        EditResultWire::new(&session, outcome),
+    ))
 }
 
 /// The open project, only when it is the one the request addresses. A mutation carrying no

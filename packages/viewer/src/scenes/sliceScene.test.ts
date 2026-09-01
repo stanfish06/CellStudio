@@ -1,11 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PickingInfo } from '@deck.gl/core'
-import { SliceScene } from './sliceScene'
+import type { PlaneBuffer } from '@cellstudio/api-client'
+import { SliceScene, lineageHighlight } from './sliceScene'
 import { PlaneCache } from '../data/planeCache'
+import { RemapCache } from '../data/trackFrame'
 import { TrackSource } from '../data/trackSource'
 import { MaskEditor } from '../edit/maskEditor'
+import { labelColor } from '../layers/labelPalette'
+import { trackColor } from '../layers/tracks'
 import { PerfMonitor } from '../perf'
-import { FakeApi, cell, devProject, layerProps, makePlane, navSnapshot } from '../test/data'
+import {
+  FakeApi,
+  cell,
+  devProject,
+  layerProps,
+  makePlane,
+  navSnapshot,
+  type SliceCall,
+} from '../test/data'
 
 const setup = (auto = true) => {
   const api = new FakeApi()
@@ -355,5 +367,262 @@ describe('SliceScene label overlay', () => {
     scene.update(navSnapshot(project, { tool: 'pointer' }))
     scene.setPointer([100, 200])
     expect(scene.layers().some((l) => l.id.endsWith('-brush-cursor'))).toBe(false)
+  })
+})
+
+/** Label planes filled with one id per frame, so the remap output is observable. */
+class LabelValueApi extends FakeApi {
+  labelIdFor: (t: number) => number = () => 0
+
+  override slice(q: SliceCall['q'], signal?: AbortSignal): Promise<PlaneBuffer> {
+    return super.slice(q, signal).then((plane) => {
+      if (q.layer === 'labels') new Uint32Array(plane.data).fill(this.labelIdFor(q.t))
+      return plane
+    })
+  }
+}
+
+describe('SliceScene track-colored labels.', () => {
+  const project = devProject({ hasLabels: true, hasGraph: true })
+
+  const setupTracked = () => {
+    const api = new LabelValueApi()
+    api.labelIdFor = (t) => (t === 0 ? 77 : 78)
+    api.cells = [cell(77, 0, [512, 100, 200], 5), cell(78, 1, [512, 105, 205], 5)]
+    const planes = new PlaneCache({ api })
+    const tracks = new TrackSource(api)
+    const remaps = new RemapCache()
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes,
+      tracks,
+      remaps,
+      api,
+      editor: labelEditor(api, true),
+    })
+    return { api, scene, tracks, remaps }
+  }
+
+  const labelLayer = (scene: SliceScene) =>
+    layerProps(scene.layers().find((l) => l.id.endsWith('-labels')))
+  const shownId = (scene: SliceScene): number => {
+    const channelData = labelLayer(scene).channelData as { data: Uint32Array[] }
+    return channelData.data[0]?.[0] ?? -1
+  }
+
+  it('renders the mask fill in the trail color for one tracked cell across two frames', async () => {
+    const { scene } = setupTracked()
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, t: 0 }))
+    await settle()
+    // voxel 77 displays as track 5 — the exact value the trail keys its color on
+    expect(shownId(scene)).toBe(5)
+    scene.update(
+      navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, t: 1, generation: 2 }),
+    )
+    await settle()
+    expect(shownId(scene)).toBe(5)
+    expect(trackColor(5)).toEqual(labelColor(5))
+  })
+
+  it('keeps masks track-colored when the track overlay is hidden', async () => {
+    const { api, scene } = setupTracked()
+    scene.update(
+      navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, tracks: { on: false } }),
+    )
+    await settle()
+    expect(api.cellCalls).toHaveLength(1)
+    expect(shownId(scene)).toBe(5)
+    expect(scene.layers().some((l) => l.id.endsWith('-tracks'))).toBe(false)
+  })
+
+  it('translates the selected cell id to its track id for the shader highlight', async () => {
+    const { scene } = setupTracked()
+    scene.update(
+      navSnapshot(project, {
+        activeView: 'xz',
+        index: { xz: 512 },
+        selection: { cellId: 77 },
+      }),
+    )
+    await settle()
+    expect(labelLayer(scene).selectedLabel).toBe(5)
+  })
+
+  it('renders the canonical buffer until /cells lands, then swaps in the remap', async () => {
+    const api = new LabelValueApi()
+    api.labelIdFor = () => 77
+    api.cells = [cell(77, 0, [512, 100, 200], 5)]
+    const held: ((rows: typeof api.cells) => void)[] = []
+    api.cellsWindow = (q) => {
+      api.cellCalls.push({ t0: q.t0, t1: q.t1 })
+      return new Promise((resolve) => held.push(resolve))
+    }
+    const planes = new PlaneCache({ api })
+    const tracks = new TrackSource(api)
+    const remaps = new RemapCache()
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes,
+      tracks,
+      remaps,
+      api,
+      editor: labelEditor(api, true),
+    })
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    // the label plane beat /cells: canonical ids, nothing cached under this graph version
+    expect(shownId(scene)).toBe(77)
+    expect(remaps.stats.entries).toBe(0)
+    held[0]?.(api.cells)
+    await settle()
+    expect(shownId(scene)).toBe(5)
+    expect(remaps.stats.entries).toBe(1)
+  })
+
+  it('renders identical colors to the label-id scheme when no tracks are loaded', async () => {
+    const { api, scene, remaps } = setupTracked()
+    api.cells = []
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    // canonical buffer, untouched: same values, same shader palette, same colors
+    expect(shownId(scene)).toBe(77)
+    expect(remaps.stats.entries).toBe(0)
+    expect(labelLayer(scene).selectedLabel).toBe(0)
+  })
+
+  it('makes zero /cells calls for opacity and fade changes (task 5.2)', async () => {
+    const { api, scene } = setupTracked()
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    expect(api.cellCalls).toHaveLength(1)
+    scene.update(
+      navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, tracks: { opacity: 0.4 } }),
+    )
+    scene.update(
+      navSnapshot(project, {
+        activeView: 'xz',
+        index: { xz: 512 },
+        tracks: { fade: { on: false, max: 0.7, min: 0.1 } },
+      }),
+    )
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, trail: 3 }))
+    await settle()
+    expect(api.cellCalls).toHaveLength(1)
+  })
+
+  it('passes the fade bounds through to the track layer', async () => {
+    const { scene } = setupTracked()
+    const fade = { on: true, max: 0.8, min: 0.2 }
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, tracks: { fade } }))
+    await settle()
+    const overlay = layerProps(scene.layers().find((l) => l.id.endsWith('-tracks')))
+    expect(overlay.fade).toEqual(fade)
+  })
+
+  it("highlights only the selected cell's own history, not cousin branches", () => {
+    // 1 divides into 2 and 3; 2 continues to 4. Selecting 4 must not light up 3.
+    const lineage = {
+      graphVersion: 1,
+      focusCellId: 4,
+      cells: [
+        cell(1, 0, [1, 1, 1]),
+        cell(2, 1, [1, 2, 2]),
+        cell(3, 1, [1, 3, 3]),
+        cell(4, 2, [1, 4, 4]),
+      ],
+      links: [
+        { parent: 1, child: 2 },
+        { parent: 1, child: 3 },
+        { parent: 2, child: 4 },
+      ],
+    }
+    const { set, overlay } = lineageHighlight(lineage, 4)
+    expect([...(set ?? [])].sort((a, b) => a - b)).toEqual([1, 2, 4])
+    expect(overlay?.links).toEqual([
+      { parent: 2, child: 4 },
+      { parent: 1, child: 2 },
+    ])
+    expect(overlay?.cells.map((c) => c.id)).toEqual([1, 2, 4])
+  })
+
+  it('falls back to the selected cell alone until its lineage lands', () => {
+    expect(lineageHighlight(null, 7).set).toEqual(new Set([7]))
+    expect(lineageHighlight(null, null).set).toBeUndefined()
+  })
+
+  it('a trail pick selects that edge and never a cell', async () => {
+    const api = new LabelValueApi()
+    api.cells = [cell(77, 0, [512, 100, 200], 5), cell(78, 1, [512, 105, 205], 5)]
+    const picked: { parent: number; child: number }[] = []
+    const cells: number[] = []
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes: new PlaneCache({ api }),
+      tracks: new TrackSource(api),
+      remaps: new RemapCache(),
+      api,
+      onSelect: (c) => cells.push(c.id),
+      onSelectLink: (link) => picked.push(link),
+    })
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+
+    const segment = { fromCellId: 77, toCellId: 78 } as unknown as PickingInfo['object']
+    expect(scene.handlePick({ object: segment } as PickingInfo)).toBe(null)
+    expect(picked).toEqual([{ parent: 77, child: 78 }])
+    expect(cells).toEqual([])
+  })
+
+  it('passes the selected edge through to the track layer', async () => {
+    const { scene } = setupTracked()
+    const selectedLink = { parent: 77, child: 78 }
+    scene.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, selectedLink }))
+    await settle()
+    const overlay = layerProps(scene.layers().find((l) => l.id.endsWith('-tracks')))
+    expect(overlay.selectedLink).toEqual(selectedLink)
+  })
+
+  it('passes the dot size through to the track layer', async () => {
+    const { scene } = setupTracked()
+    scene.update(
+      navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, tracks: { dotSize: 9 } }),
+    )
+    await settle()
+    const overlay = layerProps(scene.layers().find((l) => l.id.endsWith('-tracks')))
+    expect(overlay.dotSize).toBe(9)
+  })
+
+  it('holds the overlay on the shown frame until the image for the new one lands', async () => {
+    const api = new LabelValueApi()
+    api.auto = false
+    api.cells = [cell(77, 0, [512, 100, 200], 5), cell(78, 1, [512, 105, 205], 5)]
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes: new PlaneCache({ api }),
+      tracks: new TrackSource(api),
+      remaps: new RemapCache(),
+      api,
+    })
+    const at = (t: number) => navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, t })
+    const trackT = () =>
+      layerProps(scene.layers().find((l) => l.id.endsWith('-tracks'))).t as number
+    // held responses stay in the array once settled, so resolve every index
+    const deliver = async () => {
+      for (let i = 0; i < api.openSlices; i += 1) api.settleSlice(i)
+      await settle()
+    }
+
+    scene.update(at(0))
+    await settle()
+    await deliver()
+    expect(trackT()).toBe(0)
+
+    // t moved, the image for it is still in flight: overlays stay on frame 0
+    scene.update(at(1))
+    await settle()
+    expect(trackT()).toBe(0)
+
+    await deliver()
+    expect(trackT()).toBe(1)
   })
 })

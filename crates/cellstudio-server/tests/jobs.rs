@@ -142,13 +142,11 @@ fn an_import_is_scheduled_as_a_job_and_reports_why_it_cannot_run_yet() {
     let tracks = support::data("tracking_valid", "tracks.json");
     let server = Server::without_proxy();
     server.open_project(&dataset);
+    let session = server.session();
 
-    let started = server
-        .post("/import/tracks")
-        .json(&json!({ "path": tracks }))
-        .send()
-        .expect("import");
-    assert!(started.status().is_success(), "POST /import/tracks");
+    // label mask import still lands with a later phase; the job says so instead of hanging
+    let started = server.post_as("/import/labels", &session, &json!({ "path": tracks }));
+    assert!(started.status().is_success(), "POST /import/labels");
     let id = started.json::<Value>().expect("JobRef")["id"]
         .as_str()
         .expect("job id")
@@ -159,11 +157,8 @@ fn an_import_is_scheduled_as_a_job_and_reports_why_it_cannot_run_yet() {
         .iter()
         .find(|job| job["id"] == id.as_str())
         .unwrap_or_else(|| panic!("job {id} is not listed: {listed:?}"));
-    assert_eq!(job["kind"], "import-tracks");
-    assert_eq!(
-        job["status"], "failed",
-        "the import body lands with the viewing-completion phase: {job}"
-    );
+    assert_eq!(job["kind"], "import-labels");
+    assert_eq!(job["status"], "failed", "{job}");
     assert!(
         job["message"]
             .as_str()
@@ -172,11 +167,11 @@ fn an_import_is_scheduled_as_a_job_and_reports_why_it_cannot_run_yet() {
     );
 
     // an import of something that is not there never becomes a job at all
-    let missing = server
-        .post("/import/tracks")
-        .json(&json!({ "path": dir.path().join("nope.json") }))
-        .send()
-        .expect("import");
+    let missing = server.post_as(
+        "/import/tracks",
+        &session,
+        &json!({ "path": dir.path().join("nope.json") }),
+    );
     assert_eq!(missing.status(), 404);
     assert_eq!(
         server.jobs().len(),
@@ -184,11 +179,7 @@ fn an_import_is_scheduled_as_a_job_and_reports_why_it_cannot_run_yet() {
         "a refused import must not leave a job behind"
     );
 
-    let unknown = server
-        .post("/import/masks")
-        .json(&json!({ "path": tracks }))
-        .send()
-        .expect("import");
+    let unknown = server.post_as("/import/masks", &session, &json!({ "path": tracks }));
     assert_eq!(unknown.status(), 400, "unknown import kind");
 }
 

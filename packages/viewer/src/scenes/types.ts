@@ -16,6 +16,8 @@ export type NavSnapshot = Pick<
   | 'tool'
   | 'axisScale'
   | 'selection'
+  | 'selectedLink'
+  | 'pendingLink'
   | 'generation'
 >
 

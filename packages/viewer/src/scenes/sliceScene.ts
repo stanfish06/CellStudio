@@ -7,6 +7,7 @@ import { GpuBudget, gpuBudget as defaultBudget } from '../data/gpuBudget'
 import { planeKeyId, type PlaneKey } from '../data/keys'
 import type { PlaneCache } from '../data/planeCache'
 import { DEFAULT_BRICK, LatestWins, nextBrickIndex, type BrickShape } from '../data/prefetch'
+import type { RemapCache } from '../data/trackFrame'
 import type { TrackSource } from '../data/trackSource'
 import { AXIS_SLOT } from '../edit/stamp'
 import type { LabelPlaneView, MaskEditor } from '../edit/maskEditor'
@@ -32,7 +33,12 @@ import {
 } from '../layers/orthoPlane'
 import { clampGamma } from '../layers/gamma'
 import { labelPlaneExtensions, labelPlaneProps } from '../layers/labelPalette'
-import { TrackLayer, type TrackPoint } from '../layers/tracks'
+import {
+  TrackLayer,
+  type LineageOverlay,
+  type TrackPoint,
+  type TrackSegment,
+} from '../layers/tracks'
 import { vivLayer } from '../layers/viv'
 import type { PerfMonitor } from '../perf'
 import { sliceAxis, type SliceOrientation } from '../state/nav'
@@ -42,6 +48,8 @@ export interface SliceSceneOptions {
   orientation: SliceOrientation
   planes: PlaneCache
   tracks?: TrackSource
+
+
   perf?: PerfMonitor
   budget?: GpuBudget
   brick?: BrickShape
@@ -52,11 +60,17 @@ export interface SliceSceneOptions {
   api?: PixelApi
   /** Owns the label echo and whether a label store exists at all. */
   editor?: MaskEditor
+  /** Remapped display copies of label planes with voxel ids mapped to track ids. */
+  remaps?: RemapCache
   /** Centroid pick; the session wires these to the nav store. */
   onSelect?: (cell: CellRow) => void
   onJumpToCell?: (cell: CellRow) => void
-  /** A label voxel resolved to a cell id, which is the voxel value (design D11). */
+  /** A label voxel resolved to a cell id, which is the voxel value. */
   onSelectLabel?: (cellId: number) => void
+  /** A click while the link tool is armed, resolved to the target cell id. */
+  onLinkTarget?: (cellId: number) => void
+  /** A click on a trail segment: the edge it names, for cutting one link. */
+  onSelectLink?: (link: { parent: number; child: number }) => void
 }
 
 interface Committed {
@@ -105,6 +119,7 @@ export class SliceScene {
   readonly id: string
   private readonly planes: PlaneCache
   private readonly tracksSource?: TrackSource
+  private readonly remaps?: RemapCache
   private readonly perf?: PerfMonitor
   private readonly brick: BrickShape
   private readonly budget: GpuBudget
@@ -117,6 +132,9 @@ export class SliceScene {
   private readonly onSelect?: (cell: CellRow) => void
   private readonly onJumpToCell?: (cell: CellRow) => void
   private readonly onSelectLabel?: (cellId: number) => void
+  private readonly onLinkTarget?: (cellId: number) => void
+  private readonly onSelectLink?: (link: { parent: number; child: number }) => void
+  private lineage: LineageOverlay | null = null
   private labelCommitted: Committed | null = null
   private labelLatest = new LatestWins()
   private labelPending: string | null = null
@@ -130,6 +148,10 @@ export class SliceScene {
   private committed: Committed | null = null
   private latest = new LatestWins()
   private pendingToken: string | null = null
+  /** The frame viv finished painting; the ortho views read theirs off `committed`. */
+  private xyPresentedT: number | null = null
+  /** The newest frame whose image — and mask, when that overlay is on — is on screen. */
+  private shownT: number | null = null
   private lastIndex: number | null = null
   private direction: 1 | -1 = 1
   private camera: SliceCamera | null = null
@@ -142,6 +164,7 @@ export class SliceScene {
     this.id = opts.id ?? `slice-${opts.orientation}`
     this.planes = opts.planes
     this.tracksSource = opts.tracks
+    this.remaps = opts.remaps
     this.perf = opts.perf
     this.brick = opts.brick ?? DEFAULT_BRICK
     this.budget = opts.budget ?? defaultBudget
@@ -151,6 +174,8 @@ export class SliceScene {
     this.onSelect = opts.onSelect
     this.onJumpToCell = opts.onJumpToCell
     this.onSelectLabel = opts.onSelectLabel
+    this.onLinkTarget = opts.onLinkTarget
+    this.onSelectLink = opts.onSelectLink
     if (this.editor) {
       this.unsubscribeEditor = this.editor.onChange(() => this.changed.emit())
     }
@@ -166,6 +191,13 @@ export class SliceScene {
   /** XY only: viv pixel sources over the raw `/store` passthrough. */
   setPyramid(pyramid: XyPyramid | null): void {
     this.pyramid = pyramid
+    this.changed.emit()
+  }
+
+  /**The selected lineage, replacing the one-element highlight stub*/
+setLineage(overlay: LineageOverlay | null): void {
+    if (this.lineage === overlay) return
+    this.lineage = overlay
     this.changed.emit()
   }
 
@@ -238,7 +270,16 @@ export class SliceScene {
     }
     this.lastIndex = index
 
-    if (nav.overlays.tracks.on) this.tracksSource?.ensure(nav.t, nav.overlays.tracks.trail)
+    // Labels need graph identity too: hiding trails must not revert mask colors —
+    // but only when the project actually has a graph (`hasGraph`, not the labels proxy).
+    const needsGraph =
+      nav.overlays.tracks.on ||
+      (nav.overlays.labels.on &&
+        (this.editor?.labelsPresent ?? false) &&
+        (project.hasGraph ?? false))
+    if (needsGraph) {
+      this.tracksSource?.ensure(nav.t, nav.overlays.tracks.trail, project.versions.graph)
+    }
 
     if (this.orientation === 'xy') this.warmXyBrick(nav, project.dims)
     else this.requestPlane(nav)
@@ -281,9 +322,36 @@ export class SliceScene {
     return { display: { level, zoom }, awaitingFrame: this.pendingToken !== null }
   }
 
+  /** The frame the image on screen belongs to, or null while that is unknown. */
+  private imageT(): number | null {
+    return this.orientation === 'xy' ? this.xyPresentedT : (this.committed?.key.t ?? null)
+  }
+
+  /**
+   * Overlays follow the pixels: image first, then mask, then tracks. `shownT` advances only
+   * once the image for a frame is on screen and — when the label overlay is on — its mask
+   * is too, so the vector overlay can never run ahead of the raster it annotates. An
+   * unknown image frame advances it anyway rather than stalling the overlay for good.
+   */
+  private advanceShownT(nav: NavSnapshot): void {
+    const image = this.imageT()
+    if (image === null) {
+      this.shownT = nav.t
+      return
+    }
+    const masked = nav.overlays.labels.on && (this.editor?.labelsPresent ?? false)
+    if (masked && this.labelCommitted?.key.t !== image) return
+    this.shownT = image
+  }
+
+  private overlayT(nav: NavSnapshot): number {
+    return this.shownT ?? nav.t
+  }
+
   layers(): Layer[] {
     const nav = this.nav
     if (!nav?.project) return []
+    this.advanceShownT(nav)
     const out: Layer[] = []
     const image = this.orientation === 'xy' ? this.xyLayer(nav) : this.orthoLayer(nav)
     if (image) out.push(image)
@@ -303,7 +371,23 @@ export class SliceScene {
    * because deck's pick radius covers the marker.
    */
   handlePick(info: PickingInfo, doubleClick = false): CellRow | null {
-    if (!doubleClick) this.pickLabel(info)
+    // An armed link claims the click: the centroid or the label voxel is the child.
+    if (!doubleClick && this.nav?.tool === 'link' && this.nav.pendingLink && this.onLinkTarget) {
+      const point = info.object as TrackPoint | undefined
+      if (point && typeof point.cellId === 'number') {
+        this.onLinkTarget(point.cellId)
+        return this.tracksSource?.cell(point.cellId) ?? null
+      }
+      this.pickLabel(info, this.onLinkTarget)
+      return null
+    }
+    // a trail pick names an edge, not a cell: the segment carries both endpoints
+    const segment = info.object as TrackSegment | undefined
+    if (!doubleClick && segment && typeof segment.fromCellId === 'number' && this.onSelectLink) {
+      this.onSelectLink({ parent: segment.fromCellId, child: segment.toCellId })
+      return null
+    }
+    if (!doubleClick && this.onSelectLabel) this.pickLabel(info, this.onSelectLabel)
     const point = info.object as TrackPoint | undefined
     if (!point || typeof point.cellId !== 'number') return null
     const cell = this.tracksSource?.cell(point.cellId)
@@ -329,7 +413,10 @@ export class SliceScene {
     this.labelPending = null
     this.pointer = null
     this.pendingToken = null
+    this.xyPresentedT = null
+    this.shownT = null
     this.pyramid = null
+    this.lineage = null
     this.nav = null
     this.camera = null
     this.navCamera = null
@@ -404,7 +491,7 @@ export class SliceScene {
   /**
    * The label plane for the current slice, at the zoom's level. `/slice` indexes in level
    * coordinates while nav's index is level-0, and a coarse level point-samples level 0
-   * (design M8), so the two differ by the level factor.
+   *., so the two differ by the level factor.
    */
   private labelKey(nav: NavSnapshot): PlaneKey | null {
     const project = nav.project
@@ -458,6 +545,9 @@ export class SliceScene {
   private labelLayer(nav: NavSnapshot): Layer | null {
     const project = nav.project
     if (!project || !nav.overlays.labels.on) return null
+    // never paint a mask over another frame's image: hold it until the image catches up
+    const image = this.imageT()
+    if (image !== null && image !== nav.t) return null
     const level = levelForZoom(this.fetchCamera(nav).zoom, project.levels)
     const key = this.labelKey(nav)
     const base = key ? this.labelBase(key) : null
@@ -476,17 +566,44 @@ export class SliceScene {
       ? this.editor.planeBuffer(view, base?.plane ?? null)
       : (base?.plane ?? null)
     if (!plane) return null
+    const { plane: shown, selectedLabel } = this.displayPlane(nav, plane, base)
     const extent = this.extent()
     return vivLayer(OrthoPlaneLayer, {
       ...labelPlaneProps({
         id: `${this.id}-labels`,
-        plane,
+        plane: shown,
         bounds: [0, extent.height, extent.width, 0],
         opacity: nav.overlays.labels.opacity,
-        selectedLabel: nav.selection?.cellId ?? 0,
+        selectedLabel,
       }),
       extensions: this.labelExtensions,
     })
+  }
+
+  /**
+   * The display remap of D4: voxel id → track id once the graph window is ready, canonical
+   * until then, and canonical for good when no tracks are loaded. The selected id follows
+   * the same mapping so the highlight covers the whole track. Editor-synthesized buffers
+   * change under an unchanged buffer key mid-stroke, so they never enter the cache.
+   */
+  private displayPlane(
+    nav: NavSnapshot,
+    plane: PlaneBuffer,
+    base: Committed | null,
+  ): { plane: PlaneBuffer; selectedLabel: number } {
+    const selected = nav.selection?.cellId ?? 0
+    const frame = this.tracksSource?.frame()
+    const remap =
+      this.remaps !== undefined &&
+      frame !== undefined &&
+      frame.ready &&
+      (this.tracksSource?.cells.length ?? 0) > 0
+    if (!remap || !this.remaps || !frame) return { plane, selectedLabel: selected }
+    const bufferKey = base ? planeKeyId(base.key) : `${this.id}-echo`
+    return {
+      plane: this.remaps.plane(bufferKey, plane, frame, plane === base?.plane),
+      selectedLabel: frame.trackIdFor(selected) ?? selected,
+    }
   }
 
   /** The stamp the next press would write, outlined in world units so it scales with zoom. */
@@ -510,19 +627,19 @@ export class SliceScene {
     }) as unknown as Layer
   }
 
-  /** Latest-wins, so a burst of clicks selects what the last one pointed at. */
-  private pickLabel(info: PickingInfo): void {
+  /** Latest-wins, so a burst of clicks resolves what the last one pointed at. */
+  private pickLabel(info: PickingInfo, onHit: (cellId: number) => void): void {
     const nav = this.nav
     const api = this.api
     const coordinate = info.coordinate
-    if (!nav || !coordinate || !api || !this.onSelectLabel || !this.editor?.labelsPresent) return
+    if (!nav || !coordinate || !api || !this.editor?.labelsPresent) return
     const px = this.pixelAt([coordinate[0] ?? 0, coordinate[1] ?? 0])
     const [z, y, x] = [Math.floor(px[0]), Math.floor(px[1]), Math.floor(px[2])]
     const token = `${nav.t}/${z}/${y}/${x}`
     void this.labelPick
       .run(token, (signal) => api.pixel({ layer: 'labels', t: nav.t, c: 0, z, y, x }, signal))
       .then((id) => {
-        if (id) this.onSelectLabel?.(id)
+        if (id) onHit(id)
       })
       .catch(() => {})
   }
@@ -554,7 +671,8 @@ export class SliceScene {
     if (!pyramid || !nav.project) return null
     const visible = visibleChannels(nav.channels)
     if (visible.length === 0) return null
-    const token = `xy/${nav.t}/${nav.slices.xy.index}#${nav.generation}`
+    const t = nav.t
+    const token = `xy/${t}/${nav.slices.xy.index}#${nav.generation}`
     this.perf?.begin('xy-step', token)
     return vivLayer(MultiscaleImageLayer, {
       id: `${this.id}-image`,
@@ -575,6 +693,7 @@ export class SliceScene {
       maxCacheSize: this.budget.tileCacheSize(pyramid.tileSize, visible.length),
       onViewportLoad: () => {
         this.perf?.presented(token)
+        this.xyPresentedT = t
         this.changed.emit()
       },
     })
@@ -604,17 +723,55 @@ export class SliceScene {
   private trackLayer(nav: NavSnapshot): Layer | null {
     const cells = this.tracksSource?.cells
     if (!cells || cells.length === 0 || !nav.overlays.tracks.on) return null
+    const { set, overlay } = lineageHighlight(this.lineage, nav.selection?.cellId ?? null)
     return new TrackLayer({
       id: `${this.id}-tracks`,
       cells,
-      t: nav.t,
+      t: this.overlayT(nav),
       trail: nav.overlays.tracks.trail,
+      dotSize: nav.overlays.tracks.dotSize,
+      selectedLink: nav.selectedLink,
       transform: this.renderTransform,
       orientation: this.orientation,
       index: nav.slices[this.orientation].index,
       slab: this.slabRadius,
       trackOpacity: nav.overlays.tracks.opacity,
-      lineage: nav.selection ? new Set([nav.selection.cellId]) : undefined,
+      fade: nav.overlays.tracks.fade,
+      lineage: set,
+      lineageOverlay: overlay,
     }) as unknown as Layer
+  }
+}
+
+/**
+ * The highlight the track layers get for the selection: the whole lineage once the
+ * overlay for this exact focus has landed, the selected cell alone until then.
+ */
+export function lineageHighlight(
+  lineage: LineageOverlay | null,
+  selectedId: number | null,
+): { set: ReadonlySet<number> | undefined; overlay: LineageOverlay | undefined } {
+  if (selectedId === null) return { set: undefined, overlay: undefined }
+  if (!lineage || lineage.focusCellId !== selectedId) {
+    return { set: new Set([selectedId]), overlay: undefined }
+  }
+  // A cell has at most one parent, so its history is the unique path back to the root.
+  // The tree the endpoint returns also holds the branches that split off earlier; those
+  // are cousins, not this cell's history, and must not highlight.
+  const parentOf = new Map(lineage.links.map((l) => [l.child, l.parent]))
+  const path = new Set([selectedId])
+  const links: { parent: number; child: number }[] = []
+  let cursor = selectedId
+  for (;;) {
+    const parent = parentOf.get(cursor)
+    // the `has` guard also stops a degenerate cycle from looping forever
+    if (parent === undefined || path.has(parent)) break
+    links.push({ parent, child: cursor })
+    path.add(parent)
+    cursor = parent
+  }
+  return {
+    set: path,
+    overlay: { ...lineage, cells: lineage.cells.filter((c) => path.has(c.id)), links },
   }
 }

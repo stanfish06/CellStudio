@@ -7,8 +7,9 @@ use cellstudio_core::axes::{Axis, Dims, Dtype, PhysicalScale};
 use cellstudio_core::bricks::{BrickCache, BrickKey};
 use cellstudio_core::dataset::{self, Dataset};
 use cellstudio_core::labels::{
-    ChunkKey, ContractError, StrokeMode, StrokeSpec, VoxelSet, apply, check_contract, clear_label,
-    downsample, ensure_store, regenerate_coarse, restore, scan_label, snapshot, stamp_voxels,
+    ChunkKey, ContractError, MAX_LABEL_ID, StrokeMode, StrokeSpec, VoxelSet, apply, check_contract,
+    clear_label, downsample, ensure_store, regenerate_coarse, restore, scan_inventory, scan_label,
+    snapshot, stamp_voxels,
 };
 use cellstudio_core::reader::{ImageReader, OrthoAxis};
 use serde_json::json;
@@ -278,6 +279,117 @@ fn scan_label_matches_a_brute_force_count_on_a_foreign_store() {
     let b = row.bbox.expect("bbox");
     assert_eq!((b.z0, b.z1, b.y0, b.y1, b.x0, b.x1), (1, 3, 6, 10, 3, 8));
     assert_eq!(scan_label(&store, 1, 42).expect("other frame").area, 0);
+}
+
+#[test]
+fn scan_inventory_collects_every_frame_label_pair_with_exact_extents() {
+    let (dir, ds) = image(1);
+    let dims = ds.levels[0].dims;
+    let mut values = vec![0_u32; (dims.z * dims.y * dims.x) as usize];
+    for z in 1..3_u64 {
+        for y in 4..9_u64 {
+            for x in 2..7_u64 {
+                values[((z * dims.y + y) * dims.x + x) as usize] = 42;
+            }
+        }
+    }
+    for z in 3..5_u64 {
+        for y in 20..25_u64 {
+            for x in 10..15_u64 {
+                values[((z * dims.y + y) * dims.x + x) as usize] = 7;
+            }
+        }
+    }
+    let root = dir.path().join("foreign.zarr");
+    foreign_store(
+        &root,
+        &ds,
+        Dims {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 5,
+            x: 7,
+        },
+        &values,
+    );
+    let store = ensure_store(&root, &ds).expect("adopt");
+    // a third label on the other frame, through the app's own write path
+    apply(
+        &store,
+        1,
+        &StrokeSpec {
+            mode: StrokeMode::Paint { label: 9 },
+            radius: 3.0,
+            plane: None,
+            centres: vec![[3.0, 16.0, 16.0]],
+        },
+    )
+    .expect("paint");
+
+    let progress = std::cell::RefCell::new(Vec::new());
+    let inventory =
+        scan_inventory(&store, &|fraction| progress.borrow_mut().push(fraction)).expect("scan");
+    assert_eq!(
+        inventory
+            .rows
+            .iter()
+            .map(|row| (row.t, row.label))
+            .collect::<Vec<_>>(),
+        vec![(0, 7), (0, 42), (1, 9)],
+        "exactly the (t, label) pairs present, sorted"
+    );
+    for row in &inventory.rows {
+        assert_eq!(
+            *row,
+            scan_label(&store, row.t, row.label).expect("scan_label"),
+            "the inventory row equals the bounded per-label scan"
+        );
+    }
+    assert_eq!(inventory.max_id, 42);
+    assert!(inventory.oversized.is_empty());
+    assert!(inventory.multi_frame.is_empty());
+    let progress = progress.into_inner();
+    assert_eq!(progress.len() as u64, dims.t, "one callback per frame");
+    assert_eq!(progress.last().copied(), Some(1.0));
+}
+
+#[test]
+fn scan_inventory_flags_oversized_ids_and_an_id_on_two_frames() {
+    let (dir, ds) = image(1);
+    let root = dir.path().join("labels.zarr");
+    let store = ensure_store(&root, &ds).expect("create");
+    let paint = |t: u64, label: u32, centre: [f64; 3]| {
+        apply(
+            &store,
+            t,
+            &StrokeSpec {
+                mode: StrokeMode::Paint { label },
+                radius: 3.0,
+                plane: None,
+                centres: vec![centre],
+            },
+        )
+        .expect("paint");
+    };
+    let oversized = (MAX_LABEL_ID + 1) as u32;
+    paint(0, 42, [3.0, 8.0, 8.0]);
+    paint(1, 42, [3.0, 8.0, 8.0]);
+    paint(1, oversized, [3.0, 24.0, 24.0]);
+
+    let inventory = scan_inventory(&store, &|_| {}).expect("scan");
+    assert_eq!(
+        inventory
+            .rows
+            .iter()
+            .map(|row| (row.t, row.label))
+            .collect::<Vec<_>>(),
+        vec![(0, 42), (1, 42), (1, oversized)],
+        "flagged pairs are still reported"
+    );
+    assert_eq!(inventory.max_id, oversized);
+    assert_eq!(inventory.oversized, vec![oversized]);
+    assert_eq!(inventory.multi_frame, vec![42]);
 }
 
 #[test]
@@ -614,8 +726,7 @@ fn spin(mut ready: impl FnMut() -> bool, what: &str) {
 // The same cases and expectations as `packages/viewer/src/edit/stamp.test.ts`. The hash is
 // over the sorted voxel coordinates, so it catches an interior disagreement that a matching
 // count and bounding box would hide. Change the stamp formula and both sides must be
-// updated together — that is the contract (design M5).
-
+// updated together — that is the contract.
 /// A coarse level's expectation: the point-sampling factor, then count, bounds and hash.
 type Coarse = ([u64; 3], u64, Option<[u64; 6]>, u32);
 

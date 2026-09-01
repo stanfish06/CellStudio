@@ -2,7 +2,6 @@ import type { HistoryEntry } from '../types'
 
 export interface HistoryPanelProps {
   entries: readonly HistoryEntry[]
-  /** Undo/redo stay inert until the editing phases land (design D14). */
   enabled?: boolean
   onUndo?: () => void
   onRedo?: () => void

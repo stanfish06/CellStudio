@@ -227,13 +227,23 @@ fn an_adopted_store_opens_and_its_cells_are_measured_whole_rather_than_by_this_s
         painted,
         "the overlay renders at open"
     );
+    // the adoption inventory records every (t, label) before any edit is allowed
+    let jobs = server.await_jobs(EVENT_WINDOW);
+    assert!(
+        jobs.iter()
+            .any(|job| job["kind"] == "inventory" && job["status"] == "done"),
+        "an adopted store is inventoried at open: {jobs:?}"
+    );
+    let cells = server.json("/cells?t0=0&t1=0");
     assert_eq!(
-        server
-            .json("/cells?t0=0&t1=0")
+        cells
             .as_array()
             .expect("cells")
-            .len(),
-        0
+            .iter()
+            .map(|cell| (cell["id"].as_u64(), cell["area"].as_u64()))
+            .collect::<Vec<_>>(),
+        vec![(Some(u64::from(label)), Some(painted))],
+        "the inventory measured the adopted cell whole"
     );
 
     // painting over part of it measures what is left of the adopted cell, not the overlap
@@ -563,7 +573,7 @@ fn a_committed_stroke_is_immediately_visible_to_pixel_and_slice() {
     server.mutate("/mask/stroke", stroke_body(0, label, [1.5, 8.5, 8.5], 3.0));
 
     // warm every read path on the pre-edit bytes, which is what makes a missing brick-cache
-    // eviction visible (design M9)
+    // eviction visible.
     let pixel = |z: u64, y: u64, x: u64| {
         server.json(&format!("/pixel?layer=labels&t=0&c=0&z={z}&y={y}&x={x}"))["value"]
             .as_u64()

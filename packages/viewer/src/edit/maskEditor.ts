@@ -1,6 +1,6 @@
 import type {
   Dtype,
-  MaskEditResult,
+  EditResult,
   MaskMode,
   PhysicalScale,
   PlaneBuffer,
@@ -24,15 +24,15 @@ import {
 /** Ids taken per reservation, and the remainder that triggers the next one. */
 export const LEASE_SIZE = 64
 export const LEASE_LOW_WATER = 8
-/** Past this the stroke flushes and a second one continues it (design M4). */
+/** Past this the stroke flushes and a second one continues it. */
 export const MAX_STROKE_STAMPS = 4096
-/** A new stamp once the pointer has moved this fraction of a radius (design M4). */
+/** A new stamp once the pointer has moved this fraction of a radius. */
 const COALESCE = 1 / 3
 
 export interface MaskEditorOptions {
   api: MaskApi
-  /** Every committed result, for the session's `advanceLabels` path (design M21). */
-  onCommit(result: MaskEditResult): void
+  /** Every committed result; the session dispatches by domain to advanceLabels/advanceGraph. */
+  onCommit(result: EditResult): void
   onError?(error: unknown): void
   /** A new id taken for a stroke; the session selects it so the next stroke continues it. */
   onLabel?(label: number): void
@@ -99,7 +99,7 @@ interface PendingOp {
 interface Task {
   /** The echo this write carries, or null for a delete, undo or redo. */
   op: PendingOp | null
-  run(): Promise<MaskEditResult>
+  run(): Promise<EditResult>
 }
 
 /** A writable u32 copy of the authoritative buffer, or zeros when there is none. */
@@ -123,7 +123,7 @@ function u32Copy(
 /** `[row, col0, col1]` spans a level-0 set covers on one plane of a display level. */
 function planeSpans(voxels: VoxelSet, view: LabelPlaneView): [number, number, number][] {
   const factor = view.factor[AXIS_SLOT[view.axis]]
-  // A coarse level point-samples level 0 (design M8), so a slice between samples has none.
+  // A coarse level point-samples level 0., so a slice between samples has none.
   if (factor <= 0 || view.index % factor !== 0) return []
   const index = view.index / factor
   const out: [number, number, number][] = []
@@ -141,13 +141,12 @@ function planeSpans(voxels: VoxelSet, view: LabelPlaneView): [number, number, nu
 
 /**
  * The renderer's half of the edit pipeline: an immutable authoritative buffer plus an
- * ordered log of level-0 operations that have not been acknowledged yet (design M19).
- * What the layers draw is base + pending, replayed — so a refreshed base replays what is
+ * ordered log of level-0 operations that have not been acknowledged yet. * What the layers draw is base + pending, replayed — so a refreshed base replays what is
  * still pending, and a failed write removes exactly one operation.
  */
 export class MaskEditor {
   private readonly api: MaskApi
-  private readonly commit: (result: MaskEditResult) => void
+  private readonly commit: (result: EditResult) => void
   private readonly fail?: (error: unknown) => void
   private readonly announce?: (label: number) => void
   private readonly leaseSize: number
@@ -216,8 +215,7 @@ export class MaskEditor {
 
   /**
    * Starts a stroke, echoing its first stamp. False when it cannot start — a new id with
-   * no lease in hand would paint what the server is certain to reject (design M10).
-   */
+   * no lease in hand would paint what the server is certain to reject.   */
   begin(start: StrokeStart): boolean {
     this.cancel()
     const erase = start.tool === 'eraser'
@@ -254,8 +252,7 @@ export class MaskEditor {
     this.stamp(op, centre)
     this.changed.emit()
     if (op.stamps.length >= MAX_STROKE_STAMPS) {
-      const next: StrokeStart = {
-        t: op.t,
+      const next: StrokeStart = {        t: op.t,
         tool: op.mode === 'erase' ? 'eraser' : 'brush',
         radius: op.radius,
         plane: op.plane,
@@ -267,7 +264,8 @@ export class MaskEditor {
     }
   }
 
-  /** Commits the stroke: one request, one journal row, one undo step (design M4). */
+
+
   end(): void {
     const op = this.active
     if (!op) return
@@ -275,7 +273,7 @@ export class MaskEditor {
     this.enqueue({ op, run: () => this.api.stroke(this.body(op)) })
   }
 
-  /** Discards the live stroke: it leaves the log and nothing is written (design M13). */
+  /** Discards the live stroke: it leaves the log and nothing is written. */
   cancel(): void {
     const op = this.active
     if (!op) return
@@ -379,7 +377,7 @@ export class MaskEditor {
       out.fill(op.label, start, end + 1)
       return
     }
-    // A scoped eraser clears only the cell it is protecting the neighbour from (M11).
+    // A scoped eraser clears only the cell it is protecting the neighbour from.
     for (let i = start; i <= end; i++) {
       if (op.only === null || out[i] === op.only) out[i] = 0
     }
@@ -451,7 +449,7 @@ export class MaskEditor {
       .then((result) => this.settle(task, result))
       .catch((e) => {
         // Only the failed operation leaves the log; the base was never patched, so the
-        // rest of the pending log still draws over it (design M19).
+        // rest of the pending log still draws over it.
         if (task.op) this.drop(task.op)
         this.report(e)
       })
@@ -462,8 +460,13 @@ export class MaskEditor {
       })
   }
 
-  private settle(task: Task, result: MaskEditResult): void {
+  private settle(task: Task, result: EditResult): void {
     if (this.disposed) return
+    // a graph-domain undo/redo has no labels to reconcile; onCommit routes it to advanceGraph
+    if (result.domain === 'graph') {
+      this.commit(result)
+      return
+    }
     if (task.op) task.op.ackVersion = result.version
     if (result.hasLabels) this.committedEdit = true
     this.commit(result)

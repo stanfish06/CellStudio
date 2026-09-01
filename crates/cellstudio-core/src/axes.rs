@@ -84,8 +84,6 @@ impl Axis {
     }
 }
 
-/// Position of each TCZYX axis in the store's own axis list; `None` means the axis is
-/// absent from the store and normalizes to extent 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AxisMap {
     slots: [Option<u8>; 5],

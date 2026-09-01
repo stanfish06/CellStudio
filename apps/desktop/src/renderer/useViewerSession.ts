@@ -8,8 +8,7 @@ const message = (error: unknown): string => (error instanceof Error ? error.mess
 
 /**
  * Binds the viewer's scene session to the backend session: a new backend generation
- * builds a new ViewerSession, and the old one's caches die with it (design D16).
- */
+ * builds a new ViewerSession, and the old one's caches die with it. */
 export function useViewerSession(backend: BackendSession | null): {
   session: ViewerSession | null
   status: SceneStatus
@@ -48,8 +47,7 @@ export function useViewerSession(backend: BackendSession | null): {
   /**
    * Server pushes reach the pixels here, not in `useBackend`, which owns the stream but
    * holds no `ViewerSession`. Both a mask response and this event run one `advanceLabels`,
-   * which is idempotent by version (design M21).
-   */
+   * which is idempotent by version.   */
   useEffect(() => {
     if (!session || !backend) return
     const disposers = [
@@ -57,11 +55,17 @@ export function useViewerSession(backend: BackendSession | null): {
         if (event.layer === 'labels') session.advanceLabels(event.sessionId, event.version)
         else session.invalidate(event.layer, event.version)
       }),
-      // Reconnect resyncs versions rather than invalidations, so the version comparison is
-      // what recovers a stroke that committed while the socket was down.
-      backend.events.on('versions', (event) =>
-        session.advanceLabels(event.versions.sessionId, event.versions.labels),
+      // Both the WS event and the HTTP edit result run one advanceGraph, idempotent by
+      // version — same shape as the mask path.
+      backend.events.on('graphChanged', (event) =>
+        session.advanceGraph(event.sessionId, event.graphVersion, { tracks: event.tracks }),
       ),
+      // Reconnect resyncs versions rather than invalidations, so the version comparison is
+      // what recovers an edit that committed while the socket was down.
+      backend.events.on('versions', (event) => {
+        session.advanceLabels(event.versions.sessionId, event.versions.labels)
+        session.advanceGraph(event.versions.sessionId, event.versions.graph)
+      }),
     ]
     return () => {
       for (const dispose of disposers) dispose()

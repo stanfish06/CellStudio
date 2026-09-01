@@ -14,6 +14,7 @@ const BACKEND_TEXT: Record<BackendState, string> = {
 const JOB_TEXT: Record<JobState['kind'], string> = {
   rechunk: 'Re-chunking',
   proxy: 'Building proxy',
+  inventory: 'Inventorying labels',
   'import-tracks': 'Importing tracks',
   'import-labels': 'Importing masks',
   export: 'Exporting',
@@ -29,6 +30,8 @@ export interface StatusBarProps {
   pendingWrites: number
   /** Most recent failure to reach the user; a later success clears it. */
   error?: string | null
+  /** Non-failure completion message — e.g. the path a tracking snapshot was written to. */
+  notice?: string | null
 }
 
 export function StatusBar({
@@ -39,6 +42,7 @@ export function StatusBar({
   perf,
   pendingWrites,
   error = null,
+  notice = null,
 }: StatusBarProps) {
   const job = activeJob(jobs)
   return (
@@ -78,11 +82,16 @@ export function StatusBar({
         />
         {BACKEND_TEXT[backend]}
       </span>
-      <span className="job-status">
+      <span className="job-status" title={notice ?? undefined}>
         {job ? (
           <>
             <i className="dot progress" />
             {JOB_TEXT[job.kind]} {formatPercent(job.progress)}
+          </>
+        ) : notice ? (
+          <>
+            <i className="dot" />
+            {notice}
           </>
         ) : (
           <>

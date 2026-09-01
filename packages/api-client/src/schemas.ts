@@ -67,6 +67,12 @@ export const ProjectInfo = z.object({
   versions: Versions,
   layout: LayoutAdvisory,
   hasLabels: z.boolean(),
+  /**
+   * Any `links` row exists — a snapshot at open/refetch, refreshed with the next
+   * ProjectInfo fetch. The server always sends it; optional so existing constructors
+   * stay valid.
+   */
+  hasGraph: z.boolean().optional(),
 })
 export type ProjectInfo = z.infer<typeof ProjectInfo>
 
@@ -82,6 +88,8 @@ export const CellRow = z.object({
   confidence: z.number().nullable(),
   state: CellState.nullable(),
   trackId: u32.nullable(),
+  /** The parent cell's id, so a trail can walk from a daughter into its parent track. */
+  parentId: u32.nullable(),
   reviewed: z.boolean(),
 })
 export type CellRow = z.infer<typeof CellRow>
@@ -96,6 +104,8 @@ export type LinkRow = z.infer<typeof LinkRow>
 
 export const LineageTree = z.object({
   rootCellId: u32,
+  /** The cell the tree was requested for; the client re-centres highlights on it. */
+  focusCellId: u32,
   cells: z.array(CellRow),
   links: z.array(LinkRow),
 })
@@ -111,7 +121,14 @@ export const Histogram = z.object({
 })
 export type Histogram = z.infer<typeof Histogram>
 
-export const JobKind = z.enum(['rechunk', 'proxy', 'import-tracks', 'import-labels', 'export'])
+export const JobKind = z.enum([
+  'rechunk',
+  'proxy',
+  'inventory',
+  'import-tracks',
+  'import-labels',
+  'export',
+])
 export type JobKind = z.infer<typeof JobKind>
 
 export const JobState = z.object({
@@ -135,6 +152,8 @@ export const ServerEvent = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('graphChanged'),
+    /** Graph versions are not comparable across projects, so the event names its session. */
+    sessionId: z.string(),
     graphVersion: z.number().int().nonnegative(),
     tracks: z.array(u32),
   }),
@@ -186,6 +205,8 @@ export const LabelLease = z.object({ first: u32, count: z.number().int().positiv
 export type LabelLease = z.infer<typeof LabelLease>
 
 export const MaskEditResult = z.object({
+  /** The server always sends 'mask'; optional so pre-union constructors stay valid. */
+  domain: z.literal('mask').optional(),
   seq: z.number().int().nonnegative(),
   version: z.number().int().nonnegative(),
   sessionId: z.string(),
@@ -195,8 +216,33 @@ export const MaskEditResult = z.object({
   /** Cells that no longer exist on that frame — erased to nothing, or deleted. */
   removed: z.array(u32),
   chunks: z.array(z.string()),
+  /** `version.graph` after the commit, when the mask edit removed cells or links. */
+  graphVersion: z.number().int().nonnegative().optional(),
+  affectedTracks: z.array(u32).optional(),
 })
 export type MaskEditResult = z.infer<typeof MaskEditResult>
+
+/** What one committed graph edit (link, unlink, or their undo/redo) tells the renderer. */
+export const GraphEditResult = z.object({
+  domain: z.literal('graph'),
+  sessionId: z.string(),
+  seq: z.number().int().nonnegative(),
+  graphVersion: z.number().int().nonnegative(),
+  /** Rows of every cell whose track assignment the edit touched, as committed. */
+  affectedCells: z.array(CellRow),
+  affectedTracks: z.array(u32),
+})
+export type GraphEditResult = z.infer<typeof GraphEditResult>
+
+/** `/edits/undo|redo` answer with whichever domain the journal row carried. */
+export const EditResult = z.union([MaskEditResult, GraphEditResult])
+export type EditResult = z.infer<typeof EditResult>
+
+export const LinkBody = z.object({ parentId: u32, childId: u32 })
+export type LinkBody = z.infer<typeof LinkBody>
+
+export const UnlinkBody = z.object({ cellId: u32 })
+export type UnlinkBody = z.infer<typeof UnlinkBody>
 
 export const Bbox = z.object({
   y0: z.number(),

@@ -14,8 +14,7 @@ import {
  * `crates/cellstudio-core/tests/labels.rs`, which is the point: the echo the renderer draws
  * and the voxels the server writes have to be the same set. The hash is over the sorted
  * coordinates, so it catches an interior disagreement that a matching count and bounding box
- * would hide. Changing the stamp formula means updating both sides together (design M5).
- */
+ * would hide. Changing the stamp formula means updating both sides together. */
 interface Case {
   name: string
   dims: [number, number, number]

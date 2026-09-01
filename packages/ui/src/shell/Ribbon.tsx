@@ -1,7 +1,14 @@
 import { BRUSH_RADIUS_MAX, BRUSH_RADIUS_MIN, type Tool } from '@cellstudio/viewer'
 import { useState } from 'react'
-import { DeleteMaskIcon, HelpIcon, ResetViewIcon, TOOL_ICONS } from '../icons'
-import { RESET_VIEW_KEY, TOOL_KEYS, TOOL_LABELS, isPaintTool, isToolEnabled } from '../lib/keymap'
+import { DeleteMaskIcon, HelpIcon, ResetViewIcon, TOOL_ICONS, UnlinkIcon } from '../icons'
+import {
+  RESET_VIEW_KEY,
+  TOOL_KEYS,
+  TOOL_LABELS,
+  UNLINK_KEY,
+  isPaintTool,
+  isToolEnabled,
+} from '../lib/keymap'
 
 interface ToolGroup {
   caption: string
@@ -11,7 +18,7 @@ interface ToolGroup {
 const GROUPS: readonly ToolGroup[] = [
   { caption: 'Navigation', tools: ['pointer', 'pan'] },
   { caption: 'Mask edit', tools: ['brush', 'eraser', 'fill', 'pick'] },
-  { caption: 'Track edit', tools: ['link', 'cut'] },
+  { caption: 'Track edit', tools: ['link'] },
 ]
 
 export interface RibbonProps {
@@ -25,6 +32,13 @@ export interface RibbonProps {
   onDeleteMask: () => void
   /** True only while a cell that exists on the current frame is selected. */
   deleteEnabled: boolean
+  /** Link's arming precondition: the project has a graph and a cell is selected. */
+  linkEnabled: boolean
+  onUnlink: () => void
+  /** What Unlink would act on: the selected edge, or the selected cell's whole track. */
+  unlinkTarget?: 'edge' | 'track'
+  /** Unlink acts on the selection; enabled exactly while a cell or an edge is selected. */
+  unlinkEnabled: boolean
 }
 
 export function Ribbon({
@@ -37,6 +51,10 @@ export function Ribbon({
   onBrushRadius,
   onDeleteMask,
   deleteEnabled,
+  linkEnabled,
+  onUnlink,
+  unlinkTarget = 'track',
+  unlinkEnabled,
 }: RibbonProps) {
   return (
     <div className="ribbon" role="toolbar" aria-label="Editing tools">
@@ -54,7 +72,12 @@ export function Ribbon({
                 key={t}
                 tool={t}
                 active={t === tool}
-                disabled={!isToolEnabled(t)}
+                disabled={t === 'link' ? !linkEnabled : !isToolEnabled(t)}
+                disabledHint={
+                  t === 'link'
+                    ? 'select a cell in a project with tracks'
+                    : 'ships with a later phase'
+                }
                 onClick={() => onTool(t)}
               />
             ))}
@@ -110,6 +133,25 @@ export function Ribbon({
                   disabled={!isPaintTool(tool)}
                 />
               </>
+            ) : null}
+            {group.caption === 'Track edit' ? (
+              <button
+                type="button"
+                className="ribbon-tool"
+                title={
+                  unlinkEnabled
+                    ? unlinkTarget === 'edge'
+                      ? `Cut the selected link (${UNLINK_KEY})`
+                      : `Unlink selected track (${UNLINK_KEY})`
+                    : `Unlink (${UNLINK_KEY}) — select a cell or a trail edge`
+                }
+                disabled={!unlinkEnabled}
+                onClick={onUnlink}
+              >
+                <UnlinkIcon />
+                <span className="ribbon-label">Unlink</span>
+                <span className="key">{UNLINK_KEY}</span>
+              </button>
             ) : null}
             <span className="ribbon-group-title" id={captionId}>
               {group.caption}
@@ -177,10 +219,12 @@ interface ToolButtonProps {
   tool: Tool
   active: boolean
   disabled: boolean
+  /** Why the button is disabled, appended to the tooltip. */
+  disabledHint: string
   onClick: () => void
 }
 
-function ToolButton({ tool, active, disabled, onClick }: ToolButtonProps) {
+function ToolButton({ tool, active, disabled, disabledHint, onClick }: ToolButtonProps) {
   const Icon = TOOL_ICONS[tool]
   const label = TOOL_LABELS[tool]
   const key = TOOL_KEYS[tool]
@@ -188,7 +232,7 @@ function ToolButton({ tool, active, disabled, onClick }: ToolButtonProps) {
     <button
       type="button"
       className={active ? 'ribbon-tool active' : 'ribbon-tool'}
-      title={disabled ? `${label} (${key}) — ships with a later phase` : `${label} (${key})`}
+      title={disabled ? `${label} (${key}) — ${disabledHint}` : `${label} (${key})`}
       aria-pressed={active}
       disabled={disabled}
       onClick={onClick}

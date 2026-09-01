@@ -109,8 +109,7 @@ export function stampRadii(r: number, scale: PhysicalScale | null): [number, num
  * `centre` in fractional level-0 voxel coordinates, membership by voxel centre (voxel
  * `i` spans `[i, i+1)`), inclusive bounds, clipped to `dims`, and `plane` pinning one
  * axis to one exact index so the 2D disk is the ellipsoid intersected with that slice.
- * Held to the same cases as `crates/cellstudio-core/tests/labels.rs` (design M5).
- */
+ * Held to the same cases as `crates/cellstudio-core/tests/labels.rs`. */
 export function stampVoxels(
   centre: PixelZYX,
   r: number,

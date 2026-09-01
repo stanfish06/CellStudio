@@ -33,9 +33,7 @@ describe('plane key identity', () => {
   })
 
   it('keys volumes on layer, level, t, channel and version', () => {
-    expect(volumeKeyId({ layer: 'image', level: 2, t: 5, c: 1, version: 7 })).toBe(
-      'image/2/5/1/v7',
-    )
+    expect(volumeKeyId({ layer: 'image', level: 2, t: 5, c: 1, version: 7 })).toBe('image/2/5/1/v7')
   })
 })
 

@@ -12,6 +12,7 @@ export {
   labelColor,
   labelPlaneExtensions,
   labelPlaneProps,
+  trackPaletteIndex,
 } from './labelPalette'
 export { distinguishableColors, srgbToLab } from './palette'
 export type { Rgb01 } from './palette'
@@ -31,14 +32,18 @@ export {
   SELECTED_COLOR,
   TrackLayer,
   TrackLayer3D,
+  buildLineageEdges,
   buildTracks,
   inSlab,
   inTrailWindow,
   trackColor,
+  trailAlpha,
 } from './tracks'
 export type {
+  BuildLineageEdgesArgs,
   BuildTracksArgs,
   BuiltTracks,
+  LineageOverlay,
   Rgb,
   TrackLayer3DProps,
   TrackLayerProps,

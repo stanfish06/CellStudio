@@ -37,12 +37,24 @@ export interface AppProps {
   status?: ProjectStatus
   /** Backend or edit failure to show in the status bar. */
   error?: string | null
+  /** Non-failure status-bar message — e.g. the written snapshot path. */
+  notice?: string | null
   /** True only while `selection` names a cell that exists on the current frame. */
   canDeleteMask?: boolean
   onDeleteMask?: () => void
+  /** Unlink the selected track; gated on the nav selection. */
+  onUnlink?: () => void
   onUndo?: () => void
   onRedo?: () => void
   onMenu?: (menu: MenuId) => void
+  /** File → "Open dataset…" / "Import tracking…". */
+  onOpenDataset?: () => void
+  onImportTracking?: () => void
+  canImportTracking?: boolean
+  importTrackingHint?: string
+  /** Edit → "Save tracking snapshot". */
+  onSaveTrackingSnapshot?: () => void
+  canSaveTrackingSnapshot?: boolean
 }
 
 const NO_JOBS: readonly JobState[] = []
@@ -65,11 +77,19 @@ export function App({
   history = NO_HISTORY,
   status = DEFAULT_STATUS,
   error = null,
+  notice = null,
   canDeleteMask = false,
   onDeleteMask = NOOP,
+  onUnlink = NOOP,
   onUndo = NOOP,
   onRedo = NOOP,
   onMenu,
+  onOpenDataset,
+  onImportTracking,
+  canImportTracking = false,
+  importTrackingHint,
+  onSaveTrackingSnapshot,
+  canSaveTrackingSnapshot = false,
 }: AppProps) {
   const project = useNav((s) => s.project)
   const tool = useNav((s) => s.tool)
@@ -79,6 +99,13 @@ export function App({
   const brushRadius = useNav((s) => s.brush.radius)
   const setBrushRadius = useNav((s) => s.setBrushRadius)
   const resetVolumeCamera = useNav((s) => s.resetVolumeCamera)
+  const navSelection = useNav((s) => s.selection)
+  const navSelectedLink = useNav((s) => s.selectedLink)
+
+  // Arming preconditions. Link needs a graph and a selection; Unlink acts on
+  // whichever is selected — one edge cuts that link, a cell deletes its whole track.
+  const linkEnabled = (project?.hasGraph ?? false) && navSelection !== null
+  const unlinkEnabled = navSelection !== null || navSelectedLink !== null
 
   const [tab, setTab] = useState<InspectorTab>('inspect')
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -116,6 +143,10 @@ export function App({
           // Inert without a selection on this frame, matching the ribbon button.
           if (canDeleteMask) onDeleteMask()
           break
+        case 'unlink':
+          // Inert without a selection, matching the ribbon button.
+          if (nav.selection !== null || nav.selectedLink !== null) onUnlink()
+          break
         case 'undo':
           onUndo()
           break
@@ -130,6 +161,8 @@ export function App({
           setShortcutsOpen(true)
           break
         case 'dismiss':
+          // Esc also disarms a pending link.
+          nav.cancelLink()
           dismiss()
           break
       }
@@ -138,11 +171,19 @@ export function App({
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dismiss, canDeleteMask, onDeleteMask, onUndo, onRedo])
+  }, [dismiss, canDeleteMask, onDeleteMask, onUnlink, onUndo, onRedo])
 
   return (
     <div className="app">
-      <MenuBar onMenu={onMenu} />
+      <MenuBar
+        onMenu={onMenu}
+        onOpenDataset={onOpenDataset}
+        onImportTracking={onImportTracking}
+        canImportTracking={canImportTracking}
+        importTrackingHint={importTrackingHint}
+        onSaveTrackingSnapshot={onSaveTrackingSnapshot}
+        canSaveTrackingSnapshot={canSaveTrackingSnapshot}
+      />
       <Ribbon
         tool={tool}
         onTool={setTool}
@@ -153,6 +194,10 @@ export function App({
         onBrushRadius={setBrushRadius}
         onDeleteMask={onDeleteMask}
         deleteEnabled={canDeleteMask}
+        linkEnabled={linkEnabled}
+        onUnlink={onUnlink}
+        unlinkEnabled={unlinkEnabled}
+        unlinkTarget={navSelectedLink !== null ? 'edge' : 'track'}
       />
       <main className="workspace">
         <ViewPanel
@@ -184,6 +229,7 @@ export function App({
         perf={perf}
         pendingWrites={status.pendingWrites}
         error={error}
+        notice={notice}
       />
       {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
     </div>

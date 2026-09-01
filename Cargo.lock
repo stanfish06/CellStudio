@@ -314,6 +314,7 @@ dependencies = [
  "bytes",
  "cellstudio-core",
  "cellstudio-db",
+ "flate2",
  "futures",
  "parking_lot",
  "rand 0.10.2",

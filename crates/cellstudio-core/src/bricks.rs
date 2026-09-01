@@ -54,6 +54,7 @@ impl Brick {
             zyx[1] - self.origin[1],
             zyx[2] - self.origin[2],
         ];
+        // linear index
         let index = (local[0] * self.shape[1] + local[1]) * self.shape[2] + local[2];
         Some(index as usize * self.dtype.size_bytes())
     }

@@ -34,6 +34,12 @@ class HeldCellsApi extends FakeApi {
   get openCells(): number {
     return this.pendingCells.length
   }
+
+  settleCells(at: number): void {
+    const resolve = this.pendingCells[at]
+    if (!resolve) throw new Error(`no pending cells window at ${at}`)
+    resolve(this.cells)
+  }
 }
 
 const session = (api: FakeApi, tSettleMs = 150) =>
@@ -136,14 +142,14 @@ describe('ViewerSession', () => {
     s.dispose()
   })
 
-  it('refetches overlays after a graph change', async () => {
+  it('refetches overlays after a graph advance', async () => {
     const api = new FakeApi()
     api.cells = [cell(1, 0, [1, 10, 10])]
     const s = session(api)
     s.update(navSnapshot(project, { activeView: 'xy' }))
     await settle()
     const calls = api.cellCalls.length
-    s.graphChanged()
+    s.advanceGraph('session-1', 2)
     s.update(navSnapshot(project, { activeView: 'xy', generation: 2 }))
     await settle()
     expect(api.cellCalls.length).toBe(calls + 1)
@@ -395,5 +401,308 @@ describe('ViewerSession label version path', () => {
     await settle()
     expect(api.reserveCalls).toEqual([64])
     s.dispose()
+  })
+})
+
+describe('ViewerSession graph version path (task 7.5)', () => {
+  const project = devProject({ hasLabels: true })
+
+  const graphSession = (api: FakeApi) => {
+    const graphVersions: number[] = []
+    const s = new ViewerSession({
+      api,
+      budget: new GpuBudget({
+        totalBytes: 512 * 1024 * 1024,
+        volumeCeilingBytes: 8 * 1024 * 1024,
+      }),
+      nav: {
+        select: () => {},
+        jumpToCell: () => {},
+        setGraphVersion: (v) => graphVersions.push(v),
+      },
+    })
+    return { s, graphVersions }
+  }
+
+  it('applies once whichever of the response and the event lands first', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    const { s, graphVersions } = graphSession(api)
+    s.update(navSnapshot(project, { activeView: 'xy' }))
+    await settle()
+    expect(api.cellCalls).toHaveLength(1)
+
+    expect(s.advanceGraph('session-1', 2, { tracks: [5] })).toBe(true)
+    await settle()
+    expect(api.cellCalls).toHaveLength(2)
+    // the matching event arrives after the response, and does nothing
+    expect(s.advanceGraph('session-1', 2)).toBe(false)
+    await settle()
+    expect(api.cellCalls).toHaveLength(2)
+    expect(graphVersions).toEqual([2])
+    s.dispose()
+  })
+
+  it('rejects another session and a non-advancing version', async () => {
+    const api = new FakeApi()
+    const { s, graphVersions } = graphSession(api)
+    s.update(navSnapshot(project, { activeView: 'xy' }))
+    await settle()
+    const calls = api.cellCalls.length
+    // devProject opens at graph version 1
+    expect(s.advanceGraph('other-session', 9)).toBe(false)
+    expect(s.advanceGraph('session-1', 1)).toBe(false)
+    await settle()
+    expect(api.cellCalls).toHaveLength(calls)
+    expect(graphVersions).toEqual([])
+    s.dispose()
+  })
+
+  it('drops the remapped display buffers and re-versions the track window', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    const { s } = graphSession(api)
+    s.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    // drawing the label layer populates the remap cache
+    s.slices.xz.layers()
+    expect(s.remaps.stats.entries).toBeGreaterThan(0)
+
+    s.advanceGraph('session-1', 2)
+    expect(s.remaps.stats.entries).toBe(0)
+    expect(s.tracks.graphVersion).toBe(2)
+    await settle()
+    expect(s.tracks.frame()).toMatchObject({ ready: true, graphVersion: 2 })
+    s.dispose()
+  })
+
+  it('fires the lineage refetch hook with the affected identities', async () => {
+    const api = new FakeApi()
+    const { s } = graphSession(api)
+    s.update(navSnapshot(project, { activeView: 'xy' }))
+    await settle()
+    const seen: [number, readonly number[] | undefined][] = []
+    const off = s.onGraphAdvance((v, affected) => seen.push([v, affected.tracks]))
+    s.advanceGraph('session-1', 2, { tracks: [5, 6] })
+    s.advanceGraph('session-1', 2, { tracks: [5, 6] })
+    expect(seen).toEqual([[2, [5, 6]]])
+    off()
+    s.advanceGraph('session-1', 3)
+    expect(seen).toHaveLength(1)
+    s.dispose()
+  })
+
+  it('routes a graph-domain undo result out of the editor into advanceGraph', async () => {
+    const api = new FakeApi()
+    const { s, graphVersions } = graphSession(api)
+    s.update(navSnapshot(project, { activeView: 'xy' }))
+    await settle()
+    api.graphResult = {
+      domain: 'graph',
+      sessionId: 'session-1',
+      seq: 9,
+      graphVersion: 4,
+      affectedCells: [cell(77, 0, [1, 10, 20], 6)],
+      affectedTracks: [6],
+    }
+    // the versioned refetch answers with the committed graph
+    api.cells = [cell(77, 0, [1, 10, 20], 6)]
+    s.editor.undo()
+    await settle()
+    expect(graphVersions).toEqual([4])
+    expect(s.tracks.graphVersion).toBe(4)
+    expect(s.tracks.cell(77)?.trackId).toBe(6)
+    s.dispose()
+  })
+
+  it('dispatches a mask result that also bumped the graph to both advances', async () => {
+    const api = new FakeApi()
+    const { s, graphVersions } = graphSession(api)
+    s.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 } }))
+    await settle()
+    api.editGraphVersion = 5
+    api.editAffectedTracks = [7]
+    const labelFetches = () =>
+      api.sliceCalls.filter((c) => c.q.layer === 'labels' && c.q.pos === 512).length
+    const before = labelFetches()
+    s.editor.deleteMask(0, 5)
+    await settle()
+    // labels advanced (refetch at the new version) and the graph advanced too
+    expect(labelFetches()).toBe(before + 1)
+    expect(graphVersions).toEqual([5])
+    expect(s.tracks.graphVersion).toBe(5)
+    s.dispose()
+  })
+
+  it('never lets a late old-version /cells response land after an edit', async () => {
+    const api = new HeldCellsApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    const { s } = graphSession(api)
+    s.update(navSnapshot(project, { activeView: 'xy' }))
+    expect(api.openCells).toBe(1)
+
+    s.advanceGraph('session-1', 2)
+    expect(api.openCells).toBe(2)
+    // the superseded v1 response resolves late — it must not serve identity under v2
+    api.settleCells(0)
+    await settle()
+    expect(s.tracks.frame().ready).toBe(false)
+    expect(s.tracks.cells).toHaveLength(0)
+
+    api.settleCells(1)
+    await settle()
+    expect(s.tracks.frame()).toMatchObject({ ready: true, graphVersion: 2 })
+    expect(s.tracks.trackIdFor(77)).toBe(5)
+    s.dispose()
+  })
+})
+
+describe('ViewerSession link flow.', () => {
+  const project = devProject({ hasLabels: true, hasGraph: true })
+  const armed = { parentId: 77, sessionId: 'session-1', graphVersion: 1 }
+
+  const linkSession = (api: FakeApi) => {
+    const errors: string[] = []
+    const completed: string[] = []
+    const s = new ViewerSession({
+      api,
+      budget: new GpuBudget({
+        totalBytes: 512 * 1024 * 1024,
+        volumeCeilingBytes: 8 * 1024 * 1024,
+      }),
+      nav: {
+        select: () => {},
+        jumpToCell: () => {},
+        completeLink: () => completed.push('complete'),
+        cancelLink: () => completed.push('cancel'),
+      },
+      onEditError: (e) => errors.push(e instanceof Error ? e.message : String(e)),
+    })
+    return { s, errors, completed }
+  }
+
+  it('posts the link on an armed later-frame click and disarms on success', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5), cell(88, 3, [1, 12, 22], 6)]
+    const { s, errors, completed } = linkSession(api)
+    s.update(navSnapshot(project, { tool: 'link', pendingLink: armed, selection: { cellId: 77 } }))
+    await settle()
+
+    s.completePendingLink(88)
+    await settle()
+    expect(api.linkCalls).toEqual([{ parentId: 77, childId: 88 }])
+    expect(completed).toEqual(['complete'])
+    expect(errors).toEqual([])
+    // the graph EditResult reached advanceGraph
+    expect(s.tracks.graphVersion).toBe(2)
+  })
+
+  it('rejects a same-or-earlier-frame target with a reason, still armed', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 3, [1, 10, 20], 5), cell(88, 3, [1, 12, 22], 6)]
+    const { s, errors, completed } = linkSession(api)
+    s.update(
+      navSnapshot(project, { t: 3, tool: 'link', pendingLink: armed, selection: { cellId: 77 } }),
+    )
+    await settle()
+
+    s.completePendingLink(88)
+    await settle()
+    expect(api.linkCalls).toEqual([])
+    expect(completed).toEqual([])
+    expect(errors).toEqual(['Link rejected: the target must be at a later frame'])
+  })
+
+  it('surfaces a server rejection without disarming', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5), cell(88, 3, [1, 12, 22], 6)]
+    api.graphError = { status: 409, detail: 'child already has a parent' }
+    const { s, errors, completed } = linkSession(api)
+    s.update(navSnapshot(project, { tool: 'link', pendingLink: armed, selection: { cellId: 77 } }))
+    await settle()
+
+    s.completePendingLink(88)
+    await settle()
+    expect(api.linkCalls).toHaveLength(1)
+    expect(completed).toEqual([])
+    expect(errors).toEqual(['child already has a parent'])
+  })
+
+  it('cancels a pendingLink armed under an older graph version, with a message', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5), cell(88, 3, [1, 12, 22], 6)]
+    const { s, errors, completed } = linkSession(api)
+    const edited = devProject({
+      hasLabels: true,
+      hasGraph: true,
+      versions: { sessionId: 'session-1', image: 1, labels: 1, graph: 2, settings: 1 },
+    })
+    s.update(navSnapshot(edited, { tool: 'link', pendingLink: armed, selection: { cellId: 77 } }))
+    await settle()
+
+    s.completePendingLink(88)
+    await settle()
+    expect(api.linkCalls).toEqual([])
+    expect(completed).toEqual(['cancel'])
+    expect(errors).toEqual(['Link cancelled: the graph changed while the link was armed'])
+  })
+
+  it('refuses a self-link with a reason, still armed', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    const { s, errors, completed } = linkSession(api)
+    s.update(navSnapshot(project, { tool: 'link', pendingLink: armed, selection: { cellId: 77 } }))
+    await settle()
+
+    s.completePendingLink(77)
+    expect(api.linkCalls).toEqual([])
+    expect(completed).toEqual([])
+    expect(errors).toEqual(['Link rejected: a cell cannot link to itself'])
+  })
+
+  it('posts unlink for the selected cell and routes the result to advanceGraph', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    const { s, errors } = linkSession(api)
+    s.update(navSnapshot(project, { selection: { cellId: 77 } }))
+    await settle()
+
+    s.unlinkCell(77)
+    await settle()
+    expect(api.unlinkCalls).toEqual([{ cellId: 77 }])
+    expect(errors).toEqual([])
+    expect(s.tracks.graphVersion).toBe(2)
+  })
+})
+
+describe('ViewerSession lineage overlay.', () => {
+  const project = devProject({ hasLabels: true, hasGraph: true })
+
+  it('distributes the overlay to every scene and drops one from an older graph version', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    const s = session(api)
+    s.update(navSnapshot(project, { activeView: 'xy', selection: { cellId: 77 } }))
+    await settle()
+
+    const overlay = {
+      graphVersion: 1,
+      focusCellId: 77,
+      cells: [cell(77, 0, [1, 10, 20], 5), cell(88, 1, [1, 12, 22], 6)],
+      links: [{ parent: 77, child: 88 }],
+    }
+    const overlayOf = (id: string) => {
+      const built = s.slices.xy.layers().find((l) => l.id.endsWith(id))
+      return (built?.props as { lineageOverlay?: { graphVersion: number; focusCellId: number } })
+        .lineageOverlay
+    }
+
+    s.setLineage(overlay)
+    // the scene narrows the tree to the focus cell's own history, so identity is not kept
+    expect(overlayOf('-tracks')).toMatchObject({ graphVersion: 1, focusCellId: 77 })
+
+    s.advanceGraph('session-1', 3)
+    s.setLineage({ ...overlay, graphVersion: 2 })
+    expect(overlayOf('-tracks')?.graphVersion).toBe(1)
   })
 })

@@ -17,7 +17,6 @@ export const TOOL_KEYS: Record<Tool, string> = {
   fill: 'G',
   pick: 'I',
   link: 'L',
-  cut: 'X',
 }
 
 export const TOOL_LABELS: Record<Tool, string> = {
@@ -28,10 +27,12 @@ export const TOOL_LABELS: Record<Tool, string> = {
   fill: 'Fill',
   pick: 'Pick label',
   link: 'Link',
-  cut: 'Cut link',
 }
 
-export const ENABLED_TOOLS: readonly Tool[] = ['pointer', 'pan', 'brush', 'eraser']
+/** Unlink is an action on the selected cell, never a modal tool. */
+export const UNLINK_KEY = 'X'
+
+export const ENABLED_TOOLS: readonly Tool[] = ['pointer', 'pan', 'brush', 'eraser', 'link']
 
 /** Tools that stamp the brush radius; the radius control follows this set. */
 export const PAINT_TOOLS: readonly Tool[] = ['brush', 'eraser']
@@ -48,6 +49,7 @@ export type KeyAction =
   | { kind: 'tool'; tool: Tool }
   | { kind: 'brushRadius'; delta: number }
   | { kind: 'deleteMask' }
+  | { kind: 'unlink' }
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'resetView' }
@@ -117,6 +119,7 @@ export function resolveKey(e: KeyLike): KeyAction | null {
   if (e.key.length !== 1) return null
   const letter = e.key.toUpperCase()
   if (letter === RESET_VIEW_KEY) return { kind: 'resetView' }
+  if (letter === UNLINK_KEY) return { kind: 'unlink' }
   const tool = TOOL_BY_KEY.get(letter)
   return tool ? { kind: 'tool', tool } : null
 }
@@ -142,7 +145,8 @@ export const SHORTCUTS: readonly ShortcutRow[] = [
   { action: 'Pointer / pan', keys: `${TOOL_KEYS.pointer} / ${TOOL_KEYS.pan}` },
   { action: 'Brush / eraser', keys: `${TOOL_KEYS.brush} / ${TOOL_KEYS.eraser}` },
   { action: 'Fill / pick label', keys: `${TOOL_KEYS.fill} / ${TOOL_KEYS.pick}` },
-  { action: 'Link / cut link', keys: `${TOOL_KEYS.link} / ${TOOL_KEYS.cut}` },
+  { action: 'Link (arms on the selected cell)', keys: TOOL_KEYS.link },
+  { action: 'Unlink selected track', keys: UNLINK_KEY },
   { action: 'Brush radius down / up', keys: '- / =' },
   { action: 'Brush radius (over the view)', keys: 'Shift+wheel' },
   { action: 'Pan or orbit while painting', keys: 'Alt+drag' },
@@ -150,5 +154,5 @@ export const SHORTCUTS: readonly ShortcutRow[] = [
   { action: 'Undo', keys: 'Ctrl/Cmd+Z' },
   { action: 'Redo', keys: 'Ctrl/Cmd+Shift+Z' },
   { action: 'Keyboard shortcuts', keys: '?' },
-  { action: 'Close dialog or popover', keys: 'Esc' },
+  { action: 'Close dialog / cancel armed link', keys: 'Esc' },
 ]

@@ -54,7 +54,7 @@ pub async fn open_project(
     body: Result<Json<OpenBody>, JsonRejection>,
 ) -> ApiResult<Response> {
     let path = PathBuf::from(json_body(body)?.path);
-    // the coordinator comes with it: both wrappers address one labels.zarr (design M20)
+    // the coordinator comes with it: both wrappers address one labels.zarr.
     let reopening = state
         .current()
         .filter(|active| same_store(&active.source, &path));
@@ -105,6 +105,7 @@ pub async fn open_project(
     if state.config.build_proxy {
         io::schedule_proxy(&state, &active);
     }
+    io::schedule_inventory(&state, &active);
     tracing::info!(session = %active.session_id, source = ?active.source, "project opened");
     Ok(session_json(&active.session_id, info))
 }
@@ -149,7 +150,7 @@ fn open_validated(
 
 /// Adopts the project's label store, refusing the project when it does not satisfy the
 /// contract: a half-usable project with an overlay you cannot edit and no visible reason is
-/// worse than a refusal that names the reason (design M1). Called at open and again after a
+/// worse than a refusal that names the reason Called at open and again after a
 /// re-chunk rebuilds the reader.
 pub fn register_labels(project: &Project, image: &ImageReader) -> ApiResult<()> {
     if !project.has_labels() {
@@ -171,7 +172,7 @@ pub fn register_labels(project: &Project, image: &ImageReader) -> ApiResult<()> 
 
 /// The id half of the contract, which needs the database rather than the store: the overlay
 /// hands the fragment shader a float, so an adopted store whose recorded ids run past 2^24
-/// cannot be drawn (design M14). Reserving nothing reads the counter without moving it.
+/// cannot be drawn Reserving nothing reads the counter without moving it.
 fn check_label_ids(project: &Project) -> Result<(), cellstudio_core::labels::ContractError> {
     let next = match project.db.reserve_label_ids(0) {
         Ok(next) => u64::from(next),
@@ -249,6 +250,7 @@ pub fn project_info(active: &ActiveProject) -> ApiResult<ProjectInfo> {
         versions: VersionsWire::new(&active.session_id, active.versions()?),
         layout: LayoutAdvisory::from(&active.layout),
         has_labels: active.project.has_labels(),
+        has_graph: active.project.db.has_graph()?,
     })
 }
 

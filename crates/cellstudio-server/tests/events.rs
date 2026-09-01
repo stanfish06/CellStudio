@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use support::{Server, data_copy, skip};
+use support::{Server, data_copy};
 
 const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -180,9 +180,42 @@ fn job_progress_events_arrive_for_a_rechunk() {
 }
 
 #[test]
-fn graph_changed_events_need_the_track_editing_phase() {
-    skip(
-        "no route publishes Event::GraphChanged yet; POST /edits/* lands with track editing, \
-         so the variant is unreachable from the HTTP surface this crate exposes",
+fn a_graph_commit_publishes_a_session_scoped_graph_changed_and_versions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dataset = data_copy(&dir, "tiny_v2", "image.zarr");
+    let server = Server::without_proxy();
+    server.open_project(&dataset);
+    let session = server.session();
+    let first = server.mutate("/mask/reserve", json!({ "count": 4 }))["first"]
+        .as_u64()
+        .expect("first id");
+    for (t, label) in [(0, first), (1, first + 1)] {
+        server.mutate(
+            "/mask/stroke",
+            json!({
+                "t": t, "label": label, "mode": "paint", "radius": 3.0,
+                "plane": "z", "stamps": [[1.5, 8.5, 8.5]], "only": null,
+            }),
+        );
+    }
+
+    let mut events = server
+        .connect_events(&server.ws_ticket())
+        .expect("connect /events");
+    let result = server.mutate(
+        "/graph/link",
+        json!({ "parentId": first, "childId": first + 1 }),
     );
+    assert_eq!(result["domain"], "graph");
+
+    let changed = events.next_event_of("graphChanged", FRAME_TIMEOUT);
+    assert_eq!(
+        changed["sessionId"],
+        session.as_str(),
+        "versions are not comparable across projects, so the event names its session"
+    );
+    assert_eq!(changed["graphVersion"], result["graphVersion"]);
+    assert_eq!(changed["tracks"], result["affectedTracks"]);
+    let versions = events.next_event_of("versions", FRAME_TIMEOUT);
+    assert_eq!(versions["versions"]["graph"], result["graphVersion"]);
 }

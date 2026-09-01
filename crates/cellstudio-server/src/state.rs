@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use cellstudio_core::bricks::DEFAULT_CAPACITY_BYTES;
 use cellstudio_core::dataset::{Dataset, LayoutReport, analyze_layout};
@@ -58,7 +58,7 @@ pub struct ActiveProject {
     pub image: Arc<ImageReader>,
     pub project: Arc<Project>,
     /// Shared with every other wrapper over the same store, reopen included: a lock on the
-    /// wrapper would be a different lock after a reopen (design M20).
+    /// wrapper would be a different lock after a reopen.
     pub coordinator: Arc<ProjectEditCoordinator>,
     pub source: PathBuf,
     pub assembled_root: PathBuf,
@@ -114,6 +114,8 @@ pub struct AppState {
     pub tickets: Tickets,
     pub decode: Arc<Semaphore>,
     pub reads: Arc<ReadGauge>,
+    /// One tracking import at a time: raised while an import job holds the staging tables.
+    pub import_active: AtomicBool,
 }
 
 impl AppState {
@@ -127,6 +129,7 @@ impl AppState {
             tickets: Tickets::new(),
             decode: Arc::new(Semaphore::new(permits)),
             reads: Arc::new(ReadGauge::default()),
+            import_active: AtomicBool::new(false),
             config,
         })
     }
@@ -141,7 +144,7 @@ impl AppState {
 
     /// The open project, only if it is the one `session` addresses. Resolving and comparing
     /// under one read of the slot is what makes a mutation's fence a precondition: a stale
-    /// request never reaches a lock, let alone a write (design M20).
+    /// request never reaches a lock, let alone a write.
     pub fn require_for(&self, session: &str) -> ApiResult<Arc<ActiveProject>> {
         let active = self.active.read().clone().ok_or(ApiError::NoProject)?;
         if active.session_id != session {

@@ -30,13 +30,16 @@ pub enum Event {
     },
     Invalidate {
         /// Versions are not comparable across projects, so a renderer on another session
-        /// drops the event instead of invalidating its own caches (design M20).
+        /// drops the event instead of invalidating its own caches.
         session_id: String,
         layer: LayerId,
         chunks: Vec<String>,
         version: u64,
     },
     GraphChanged {
+        /// Graph versions are not comparable across projects either (see `Invalidate`), so
+        /// the renderer drops events from a session it does not speak for.
+        session_id: String,
         graph_version: u64,
         tracks: Vec<u32>,
     },

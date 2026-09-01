@@ -2,6 +2,8 @@ import type {
   Bbox,
   CellRow,
   DeleteMaskBody,
+  EditResult,
+  GraphEditResult,
   LabelLease,
   LayerId,
   MaskEditResult,
@@ -31,11 +33,18 @@ export interface PixelApi {
   cellsWindow(q: { t0: number; t1: number; bbox?: Bbox }, signal?: AbortSignal): Promise<CellRow[]>
 }
 
+/** Graph mutations; the session posts these and routes the result to `advanceGraph`. */
+export interface GraphApi {
+  link(body: { parentId: number; childId: number }): Promise<GraphEditResult>
+  unlink(body: { cellId: number }): Promise<GraphEditResult>
+  cut(body: { parentId: number; childId: number }): Promise<GraphEditResult>
+}
+
 /** The mask write path; `MaskEditor` holds this, the scenes do not. */
 export interface MaskApi {
   reserveLabels(count: number): Promise<LabelLease>
   stroke(body: StrokeBody): Promise<MaskEditResult>
   deleteMask(body: DeleteMaskBody): Promise<MaskEditResult>
-  undo(): Promise<MaskEditResult>
-  redo(): Promise<MaskEditResult>
+  undo(): Promise<EditResult>
+  redo(): Promise<EditResult>
 }

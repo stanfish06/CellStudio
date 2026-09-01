@@ -77,8 +77,8 @@ const direction = (near: WorldXYZ, far: WorldXYZ): WorldXYZ => {
 }
 
 /**
- * The canvas half of design M13: while a paint tool is active the primary drag and the
- * wheel belong to the tool, with `Alt` as the camera modifier. One stroke owns one
+ * While a paint tool is active the primary drag and the wheel belong to the tool, with
+ * `Alt` as the camera modifier. One stroke owns one
  * `pointerId`, and `cancel` is the only other way out of it.
  */
 export function paintInput(deps: PaintDeps): PaintHandlers {
@@ -98,7 +98,7 @@ export function paintInput(deps: PaintDeps): PaintHandlers {
       )
       const centre = session.volumeScene.orbCentre()
       if (centre && isPaintTool(nav)) {
-        // The readout reports the orb, not a hover pixel, while painting in 3D (M12).
+        // The readout reports the orb, not a hover pixel, while painting in 3D.
         session.readout.move(centre, {
           t: nav.t,
           channel: nav.activeChannel,
@@ -118,7 +118,7 @@ export function paintInput(deps: PaintDeps): PaintHandlers {
       ? null
       : { axis: sliceAxis(nav.activeView), index: nav.slices[nav.activeView].index }
 
-  /** The selection only targets the stroke while that cell exists on this frame (M11). */
+  /** The selection only targets the stroke while that cell exists on this frame. */
   const selectionOf = (nav: NavState): number | null => {
     const id = nav.selection?.cellId
     if (id === undefined) return null

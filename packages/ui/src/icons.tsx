@@ -49,12 +49,14 @@ export const TOOL_ICONS: Record<Tool, () => ReactElement> = {
       <path d="M10 13a4 4 0 005.7.1l2-2a4 4 0 00-5.7-5.7l-1.1 1.1M14 11a4 4 0 00-5.7-.1l-2 2A4 4 0 0012 18.6l1.1-1.1" />
     </svg>
   ),
-  cut: () => (
-    <svg {...box}>
-      <path d="M8.5 8.5L6 11a4 4 0 005.7 5.7l1-1M15.5 15.5L18 13a4 4 0 00-5.7-5.7l-1 1M4 4l16 16" />
-    </svg>
-  ),
 }
+
+/** Unlink is a ribbon action, not a tool, so it lives outside TOOL_ICONS. */
+export const UnlinkIcon = () => (
+  <svg {...box}>
+    <path d="M8.5 8.5L6 11a4 4 0 005.7 5.7l1-1M15.5 15.5L18 13a4 4 0 00-5.7-5.7l-1 1M4 4l16 16" />
+  </svg>
+)
 
 export const DeleteMaskIcon = () => (
   <svg {...box}>

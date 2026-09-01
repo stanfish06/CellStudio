@@ -4,7 +4,20 @@ import type { PixelZYX } from '../data/world'
 
 export type ActiveView = 'xy' | 'xz' | 'yz' | '3d'
 export type SliceOrientation = 'xy' | 'xz' | 'yz'
-export type Tool = 'pointer' | 'pan' | 'brush' | 'eraser' | 'fill' | 'pick' | 'link' | 'cut'
+export type Tool = 'pointer' | 'pan' | 'brush' | 'eraser' | 'fill' | 'pick' | 'link'
+
+/** The armed half of a Link: parent captured with the session and graph version it was
+ * armed under, validated again at completion. */
+export interface PendingLink {
+  parentId: number
+  sessionId: string
+  graphVersion: number
+}
+
+/** A pendingLink armed under another session or an older graph must not complete. */
+export function pendingLinkStale(pending: PendingLink, project: ProjectInfo): boolean {
+  return pending.sessionId !== project.sessionId || pending.graphVersion !== project.versions.graph
+}
 
 export interface ChannelState {
   name: string
@@ -41,7 +54,18 @@ export const BRUSH_RADIUS_MAX = 200
 
 export interface OverlayState {
   labels: { on: boolean; opacity: number }
-  tracks: { on: boolean; opacity: number; trail: number }
+  /**
+   * `trail` is the backward window length in frames, `fade` the linear opacity decay,
+   * `dotSize` the centroid radius in image pixels — it scales with the image, so a dot
+   * keeps its size relative to the cells at every zoom.
+   */
+  tracks: { on: boolean; opacity: number; trail: number; dotSize: number; fade: TrackFadeState }
+}
+
+export interface TrackFadeState {
+  on: boolean
+  max: number
+  min: number
 }
 
 // Aspects
@@ -68,6 +92,9 @@ export interface NavState {
   transport: { playing: 'off' | 't' | 'slice' }
   tool: Tool
   selection: { cellId: number } | null
+  /** The selected trail edge, for cutting one link instead of a whole track. */
+  selectedLink: { parent: number; child: number } | null
+  pendingLink: PendingLink | null
   generation: number
 
   initProject(project: ProjectInfo): void
@@ -83,6 +110,7 @@ export interface NavState {
   setOverlays(patch: Partial<OverlayState>): void
   setBrushRadius(radius: number): void
   setLabelsVersion(version: number): void
+  setGraphVersion(version: number): void
   setAxisScale(patch: Partial<AxisScale>): void
   resetAxisScale(): void
   setTool(tool: Tool): void
@@ -92,6 +120,11 @@ export interface NavState {
   jumpTo(pose: { t?: number; z?: number; y?: number; x?: number; view?: ActiveView }): void
   jumpToCell(cell: CellRow, view?: ActiveView): void
   select(cellId: number | null): void
+  selectLink(link: { parent: number; child: number } | null): void
+  armLink(): boolean
+  cancelLink(): void
+  completeLink(): void
+  markGraphPresent(): void
 }
 
 const DEFAULT_COLORS = ['#ff5c73', '#52df83', '#5ba7ff', '#d67cff', '#ffb100', '#4be0d3']
@@ -125,13 +158,21 @@ export const useNav = create<NavState>((set, get) => ({
   activeChannel: 0,
   overlays: {
     labels: { on: true, opacity: 0.36 },
-    tracks: { on: true, opacity: 0.85, trail: 6 },
+    tracks: {
+      on: true,
+      opacity: 0.85,
+      trail: 10,
+      dotSize: 3,
+      fade: { on: true, max: 1, min: 0.15 },
+    },
   },
   brush: { radius: 8 },
   axisScale: { z: 1, y: 1, x: 1 },
   transport: { playing: 'off' },
   tool: 'pointer',
   selection: null,
+  selectedLink: null,
+  pendingLink: null,
   generation: 0,
 
   initProject(project) {
@@ -148,6 +189,10 @@ export const useNav = create<NavState>((set, get) => ({
         yz: { index: Math.floor(dims.x / 2), camera: { target: [0, 0], zoom: 0 } },
       },
       volume: { camera: null },
+      selection: null,
+      selectedLink: null,
+      tool: 'pointer',
+      pendingLink: null,
       generation: get().generation + 1,
     })
   },
@@ -226,6 +271,13 @@ export const useNav = create<NavState>((set, get) => ({
     set({ project: { ...project, versions: { ...project.versions, labels: version } } })
   },
 
+  /** A committed graph edit, without a `generation` bump: identity recolors, no image refetch. */
+  setGraphVersion(version) {
+    const project = get().project
+    if (!project || project.versions.graph >= version) return
+    set({ project: { ...project, versions: { ...project.versions, graph: version } } })
+  },
+
   setAxisScale(patch) {
     const next = { ...get().axisScale, ...patch }
     set({
@@ -242,7 +294,13 @@ export const useNav = create<NavState>((set, get) => ({
   },
 
   setTool(tool) {
-    set({ tool })
+    if (tool === 'link') {
+      if (get().armLink()) set({ tool })
+      return
+    }
+    const { pendingLink } = get()
+    if (pendingLink) set({ tool, pendingLink: null })
+    else set({ tool })
   },
 
   setPlaying(playing) {
@@ -287,10 +345,48 @@ export const useNav = create<NavState>((set, get) => ({
   jumpToCell(cell, view) {
     const [z, y, x] = cell.centroid ?? [0, 0, 0]
     get().jumpTo({ t: cell.t, z, y, x, view })
-    set({ selection: { cellId: cell.id } })
+    set({ selection: { cellId: cell.id }, selectedLink: null })
   },
 
   select(cellId) {
-    set({ selection: cellId === null ? null : { cellId } })
+    set({ selection: cellId === null ? null : { cellId }, selectedLink: null })
+  },
+
+  selectLink(link) {
+    set({ selectedLink: link, selection: null })
+  },
+
+  /** Arms a link from the selected cell; refused without a graph or a selection. */
+  armLink() {
+    const { project, selection } = get()
+    if (!project || !(project.hasGraph ?? false) || !selection) return false
+    set({
+      pendingLink: {
+        parentId: selection.cellId,
+        sessionId: project.sessionId,
+        graphVersion: project.versions.graph,
+      },
+    })
+    return true
+  },
+
+  /** Esc or an explicit cancel: disarm and leave the now-inert link tool. */
+  cancelLink() {
+    const { pendingLink, tool } = get()
+    if (!pendingLink && tool !== 'link') return
+    if (tool === 'link') set({ pendingLink: null, tool: 'pointer' })
+    else set({ pendingLink: null })
+  },
+
+  /** A committed link: disarm and revert to the pointer. */
+  completeLink() {
+    set({ pendingLink: null, tool: 'pointer' })
+  },
+
+  /** The first graph edit or a finished import: enable Link/Unlink/save without a refetch. */
+  markGraphPresent() {
+    const project = get().project
+    if (!project || project.hasGraph === true) return
+    set({ project: { ...project, hasGraph: true } })
   },
 }))

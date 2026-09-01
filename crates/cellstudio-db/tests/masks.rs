@@ -4,8 +4,8 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 use cellstudio_db::{
-    CellChange, ChunkSnapshot, DbError, EditDomain, ExtentDelta, ExtentRow, LinkRow, MAX_LABEL_ID,
-    Project, VoxelBox,
+    CellChange, ChunkSnapshot, DbError, EditDomain, ExtentDelta, ExtentRow, GraphStep, LinkRow,
+    MAX_LABEL_ID, Project, VoxelBox,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -367,7 +367,13 @@ fn erasing_the_last_voxel_drops_the_cell_its_links_and_its_mask_label() {
         .expect("journal");
     let commit = project
         .db
-        .commit_edit(seq, 1, &[paint(2, &voxels)], std::slice::from_ref(snapshot))
+        .commit_edit(
+            seq,
+            1,
+            &[paint(2, &voxels)],
+            std::slice::from_ref(snapshot),
+            GraphStep::Rematerialize,
+        )
         .expect("undo");
     assert_eq!(commit.version, 1, "the commit bumps version.labels with it");
     assert_eq!(updated(&commit.cells[0]).id, 2);

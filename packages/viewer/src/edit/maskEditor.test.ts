@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { MaskEditResult, PlaneBuffer } from '@cellstudio/api-client'
+import type { EditResult, PlaneBuffer } from '@cellstudio/api-client'
 import { MaskEditor, type LabelPlaneView } from './maskEditor'
 import { FakeApi, makeLabelPlane } from '../test/data'
 
@@ -10,7 +10,7 @@ const DIMS = [3, 64, 64] as const
 const setup = (auto = true) => {
   const api = new FakeApi()
   api.auto = auto
-  const commits: MaskEditResult[] = []
+  const commits: EditResult[] = []
   const errors: unknown[] = []
   const labels: number[] = []
   const editor = new MaskEditor({
@@ -311,6 +311,7 @@ describe('MaskEditor writes', () => {
     editor.deleteMask(0, 5)
     await settle()
     expect(commits.map((c) => c.sessionId)).toEqual(['session-1', 'session-1'])
-    expect(commits[1]?.removed).toEqual([5])
+    const deletion = commits[1]
+    expect(deletion?.domain === 'graph' ? [] : deletion?.removed).toEqual([5])
   })
 })

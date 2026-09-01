@@ -97,12 +97,73 @@ export function InspectPanel({ selection, jobs, backend, status }: InspectPanelP
           onChange={(v) => setOverlays({ tracks: { ...overlays.tracks, opacity: v / 100 } })}
         />
         <SliderRow
+          label="Dot size"
+          value={overlays.tracks.dotSize}
+          min={1}
+          max={20}
+          readout={`${overlays.tracks.dotSize} px`}
+          onChange={(v) => setOverlays({ tracks: { ...overlays.tracks, dotSize: v } })}
+        />
+        <SliderRow
           label="Trail"
           value={overlays.tracks.trail}
           min={1}
           max={20}
-          readout={`±${overlays.tracks.trail} T`}
+          readout={`−${overlays.tracks.trail} T`}
           onChange={(v) => setOverlays({ tracks: { ...overlays.tracks, trail: v } })}
+        />
+        <div className="opacity-row">
+          <span>Decay</span>
+          <input
+            type="checkbox"
+            aria-label="Trail decay"
+            checked={overlays.tracks.fade.on}
+            onChange={(e) =>
+              setOverlays({
+                tracks: {
+                  ...overlays.tracks,
+                  fade: { ...overlays.tracks.fade, on: e.target.checked },
+                },
+              })
+            }
+          />
+          <span>{overlays.tracks.fade.on ? 'On' : 'Off'}</span>
+        </div>
+        <SliderRow
+          label="Decay max"
+          value={Math.round(overlays.tracks.fade.max * 100)}
+          min={0}
+          max={100}
+          readout={`${Math.round(overlays.tracks.fade.max * 100)}%`}
+          onChange={(v) =>
+            setOverlays({
+              tracks: {
+                ...overlays.tracks,
+                fade: {
+                  ...overlays.tracks.fade,
+                  max: Math.max(v / 100, overlays.tracks.fade.min),
+                },
+              },
+            })
+          }
+        />
+        <SliderRow
+          label="Decay min"
+          value={Math.round(overlays.tracks.fade.min * 100)}
+          min={0}
+          max={100}
+          readout={`${Math.round(overlays.tracks.fade.min * 100)}%`}
+          onChange={(v) =>
+            setOverlays({
+              tracks: {
+                ...overlays.tracks,
+                fade: {
+                  ...overlays.tracks.fade,
+                  min: Math.min(v / 100, overlays.tracks.fade.max),
+                },
+              },
+            })
+          }
         />
       </div>
 

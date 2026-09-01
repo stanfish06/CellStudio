@@ -11,6 +11,7 @@ import type { CellRow, Level, VolumeBuffer } from '@cellstudio/api-client'
 import { GpuBudget, gpuBudget as defaultBudget } from '../data/gpuBudget'
 import { volumeKeyId, type VolumeKey } from '../data/keys'
 import { LatestWins } from '../data/prefetch'
+import type { RemapCache } from '../data/trackFrame'
 import type { TrackSource } from '../data/trackSource'
 import type { LabelVolumeView, MaskEditor } from '../edit/maskEditor'
 import {
@@ -25,7 +26,13 @@ import {
 } from '../data/world'
 import type { VolumeCache } from '../data/volumeCache'
 import { LabelVolumeLayer, labelVolumeExtension, labelVolumeProps } from '../layers/labelVolume'
-import { TrackLayer3D, type TrackPoint } from '../layers/tracks'
+import {
+  TrackLayer3D,
+  type LineageOverlay,
+  type TrackPoint,
+  type TrackSegment,
+} from '../layers/tracks'
+import { lineageHighlight } from './sliceScene'
 import {
   gamma3DExtension,
   volumeProps,
@@ -54,8 +61,7 @@ const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
 /**
  * Where the pointer ray crosses the volume's world box, as distances along it. A miss is
  * null: there is no paintable depth under a pointer that is not looking through the
- * volume (design M12).
- */
+ * volume. */
 export function rayBoxInterval(
   origin: WorldXYZ,
   direction: WorldXYZ,
@@ -86,10 +92,11 @@ const levelFactorOf = (levels: readonly Level[], level: number): PixelZYX => {
 
 export interface VolumeSceneOptions {
   volumes: VolumeCache
-  /** The label layer's own cache: `VolumeCache.configure` holds one context (design M16). */
   labelVolumes?: VolumeCache
   editor?: MaskEditor
   tracks?: TrackSource
+  /** Display copies of label volumes with voxel ids mapped to track ids. */
+  remaps?: RemapCache
   perf?: PerfMonitor
   budget?: GpuBudget
   renderingMode?: RenderingMode
@@ -98,6 +105,10 @@ export interface VolumeSceneOptions {
   id?: string
   onSelect?: (cell: CellRow) => void
   onJumpToCell?: (cell: CellRow) => void
+  /**A click while the link tool is armed, resolved to the target cell id*/
+onLinkTarget?: (cellId: number) => void
+  /** A click on a trail segment: the edge it names, for cutting one link. */
+  onSelectLink?: (link: { parent: number; child: number }) => void
 }
 
 interface Committed {
@@ -115,11 +126,15 @@ export class VolumeScene {
   private readonly editor?: MaskEditor
   private readonly orbStep: number
   private readonly tracksSource?: TrackSource
+  private readonly remaps?: RemapCache
   private readonly perf?: PerfMonitor
   private readonly budget: GpuBudget
   private readonly changed = new Emitter()
   private readonly onSelect?: (cell: CellRow) => void
   private readonly onJumpToCell?: (cell: CellRow) => void
+  private readonly onLinkTarget?: (cellId: number) => void
+  private readonly onSelectLink?: (link: { parent: number; child: number }) => void
+  private lineage: LineageOverlay | null = null
   private renderingMode: RenderingMode
   private viewportSize: Viewport2D = { width: 1024, height: 1024 }
   private nav: NavSnapshot | null = null
@@ -144,11 +159,14 @@ export class VolumeScene {
     this.editor = opts.editor
     this.orbStep = opts.orbStep ?? ORB_WORLD_PER_PIXEL
     this.tracksSource = opts.tracks
+    this.remaps = opts.remaps
     this.perf = opts.perf
     this.budget = opts.budget ?? defaultBudget
     this.renderingMode = opts.renderingMode ?? 'additive'
     this.onSelect = opts.onSelect
     this.onJumpToCell = opts.onJumpToCell
+    this.onLinkTarget = opts.onLinkTarget
+    this.onSelectLink = opts.onSelectLink
     if (this.tracksSource) {
       this.unsubscribeTracks = this.tracksSource.onChange(() => this.changed.emit())
     }
@@ -167,6 +185,13 @@ export class VolumeScene {
 
   setRenderingMode(mode: RenderingMode): void {
     this.renderingMode = mode
+    this.changed.emit()
+  }
+
+  /**The selected lineage, replacing the one-element highlight stub*/
+setLineage(overlay: LineageOverlay | null): void {
+    if (this.lineage === overlay) return
+    this.lineage = overlay
     this.changed.emit()
   }
 
@@ -240,7 +265,7 @@ export class VolumeScene {
     const labels = nav.overlays.labels.on && (this.editor?.labelsPresent ?? false)
     const labelCache = labels ? this.labelVolumes : undefined
     // The label volume costs a channel of the ceiling, so both volumes drop a level
-    // together and stay aligned voxel for voxel (design M16).
+    // together and stay aligned voxel for voxel.
     const plan = this.budget.planVolume(
       project.levels,
       visible.length + (labelCache ? 1 : 0),
@@ -256,7 +281,12 @@ export class VolumeScene {
       tMax: project.dims.t - 1,
     })
 
-    if (nav.overlays.tracks.on) this.tracksSource?.ensure(nav.t, nav.overlays.tracks.trail)
+    // Labels need graph identity too: hiding trails must not revert mask colors —
+    // but only when the project actually has a graph (`hasGraph`, not the labels proxy).
+    const needsGraph = nav.overlays.tracks.on || (labels && (project.hasGraph ?? false))
+    if (needsGraph) {
+      this.tracksSource?.ensure(nav.t, nav.overlays.tracks.trail, project.versions.graph)
+    }
 
     const keys: VolumeKey[] = visible.map((v) => ({
       layer: 'image',
@@ -333,8 +363,7 @@ export class VolumeScene {
   /**
    * The pointer ray in world space. The orb rides a normalized parameter over the ray's
    * span through the volume, so `u` survives a camera, viewport or scale change and a
-   * miss leaves no paintable cursor at all (design M12).
-   */
+   * miss leaves no paintable cursor at all.   */
   setPointerRay(ray: { origin: WorldXYZ; direction: WorldXYZ } | null): void {
     const before = this.orbWorld()
     this.ray = ray
@@ -380,7 +409,7 @@ export class VolumeScene {
   }
 
   /** The orb centre in dataset voxels — through `fromWorld`, so `axisScale` never reaches
-   * the stamp (design M12, C11). */
+   * the stamp. */
   orbCentre(): PixelZYX | null {
     const world = this.orbWorld()
     return world ? this.frame.fromWorld(world) : null
@@ -411,15 +440,24 @@ export class VolumeScene {
     if (orb) out.push(orb)
     const cells = this.tracksSource?.cells
     if (cells && cells.length > 0 && nav.overlays.tracks.on) {
+      const { set, overlay } = lineageHighlight(this.lineage, nav.selection?.cellId ?? null)
       out.push(
         new TrackLayer3D({
           id: `${this.id}-tracks`,
           cells,
-          t: nav.t,
+          // overlays follow the pixels: the committed volume's frame, not nav's
+          t: this.committed?.t ?? nav.t,
           trail: nav.overlays.tracks.trail,
+          dotSize: nav.overlays.tracks.dotSize,
+          selectedLink: nav.selectedLink,
           transform: this.frame,
           trackOpacity: nav.overlays.tracks.opacity,
-          lineage: nav.selection ? new Set([nav.selection.cellId]) : undefined,
+          fade: nav.overlays.tracks.fade,
+          lineage: set,
+          lineageOverlay: overlay,
+          // the volume writes depth, so an overlay inside the box is hidden unless the
+          // depth comparison always passes (luma 9 names; `depthTest` is a v8 no-op)
+          parameters: { depthCompare: 'always', depthWriteEnabled: false },
         }) as unknown as Layer,
       )
     }
@@ -427,10 +465,21 @@ export class VolumeScene {
   }
 
   handlePick(info: PickingInfo, jump = false): CellRow | null {
+    // a trail pick names an edge, not a cell: the segment carries both endpoints
+    const segment = info.object as TrackSegment | undefined
+    if (!jump && segment && typeof segment.fromCellId === 'number' && this.onSelectLink) {
+      this.onSelectLink({ parent: segment.fromCellId, child: segment.toCellId })
+      return null
+    }
     const point = info.object as TrackPoint | undefined
     if (!point || typeof point.cellId !== 'number') return null
     const cell = this.tracksSource?.cell(point.cellId)
     if (!cell) return null
+    // An armed link claims the click; only centroids are pickable in 3D.
+    if (!jump && this.nav?.tool === 'link' && this.nav.pendingLink && this.onLinkTarget) {
+      this.onLinkTarget(cell.id)
+      return cell
+    }
     if (jump) this.onJumpToCell?.(cell)
     else this.onSelect?.(cell)
     return cell
@@ -445,6 +494,7 @@ export class VolumeScene {
     this.latest.abort()
     this.committed = null
     this.pendingToken = null
+    this.lineage = null
     this.nav = null
     this.lastT = null
     this.level = 0
@@ -497,23 +547,47 @@ export class VolumeScene {
       ? this.editor.volumeBuffer(view, base?.buffer ?? null)
       : (base?.buffer ?? null)
     if (!volume) return null
+    const { volume: shown, selectedLabel } = this.displayVolume(nav, volume, base, view)
     return vivLayer(LabelVolumeLayer, {
       ...labelVolumeProps({
         id: `${this.id}-labels`,
-        volume,
+        volume: shown,
         unit: this.levelUnit(project.levels, level),
         t: view.t,
         opacity: nav.overlays.labels.opacity,
-        selectedLabel: nav.selection?.cellId ?? 0,
+        selectedLabel,
       }),
       extensions: [labelVolumeExtension()],
     })
   }
 
+  /** The display remap of D4, mirroring `SliceScene.displayPlane` for the label volume. */
+  private displayVolume(
+    nav: NavSnapshot,
+    volume: VolumeBuffer,
+    base: { buffer: VolumeBuffer; version: number } | null,
+    view: LabelVolumeView,
+  ): { volume: VolumeBuffer; selectedLabel: number } {
+    const selected = nav.selection?.cellId ?? 0
+    const frame = this.tracksSource?.frame()
+    const remap =
+      this.remaps !== undefined &&
+      frame !== undefined &&
+      frame.ready &&
+      (this.tracksSource?.cells.length ?? 0) > 0
+    if (!remap || !this.remaps || !frame) return { volume, selectedLabel: selected }
+    const bufferKey = base
+      ? volumeKeyId({ layer: 'labels', level: view.level, t: view.t, c: 0, version: base.version })
+      : `${this.id}-echo`
+    return {
+      volume: this.remaps.volume(bufferKey, volume, frame, volume === base?.buffer),
+      selectedLabel: frame.trackIdFor(selected) ?? selected,
+    }
+  }
+
   /**
    * The orb the next press would stamp, as three rings. Depth testing is off: viv's
-   * ray-cast volume writes no depth, so true occlusion is not available (design M12).
-   */
+   * ray-cast volume writes no depth, so true occlusion is not available.   */
   private orbLayer(nav: NavSnapshot): Layer | null {
     if (nav.tool !== 'brush' && nav.tool !== 'eraser') return null
     const centre = this.orbWorld()
@@ -543,7 +617,7 @@ export class VolumeScene {
       widthUnits: 'pixels',
       widthMinPixels: 1,
       pickable: false,
-      parameters: { depthTest: false },
+      parameters: { depthCompare: 'always', depthWriteEnabled: false },
       getPath: (p: WorldXYZ[]) => p,
       getWidth: 1.5,
       getColor: CURSOR_COLOR,

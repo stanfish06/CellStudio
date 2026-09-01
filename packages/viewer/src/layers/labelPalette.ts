@@ -6,8 +6,7 @@ import type { Rgb } from './tracks'
 
 /**
  * viv hands the fragment shader a float, so ids are distinguishable only to 2^24. The
- * server refuses to allocate past this; an adopted store may still exceed it (design M14).
- */
+ * server refuses to allocate past this; an adopted store may still exceed it. */
 export const MAX_LABEL_ID = 0xffffff
 
 export const clampLabelId = (id: number): number =>
@@ -45,14 +44,20 @@ export const LABEL_PALETTE: readonly Rgb01[] = distinguishableColors(
   MIN_LABEL_LIGHTNESS,
 )
 
-/** Id 0 is background; ids 1..n take palette entries 0..n-1 before wrapping. */
-const paletteIndex = (label: number): number => (label - 1) % LABEL_PALETTE_SIZE
+/**
+ * Id 0 is background; ids 1..n take palette entries 0..n-1 before wrapping. The same
+ * keying the shader bakes — shared with the trail overlay so mask and trail colors agree
+ * by construction. */
+export const trackPaletteIndex = (trackId: number): number => {
+  const id = clampLabelId(trackId)
+  return id === 0 ? 0 : (id - 1) % LABEL_PALETTE_SIZE
+}
 
 /** Label id to colour, in the same order the shader's baked table uses. */
 export function labelColor(id: number): Rgb {
   const label = clampLabelId(id)
   if (label === 0) return [0, 0, 0]
-  const [r, g, b] = LABEL_PALETTE[paletteIndex(label)] as Rgb01
+  const [r, g, b] = LABEL_PALETTE[trackPaletteIndex(label)] as Rgb01
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)]
 }
 

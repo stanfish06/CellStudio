@@ -2,7 +2,7 @@
 //!
 //! [`ProjectEditCoordinator`] is `Arc`-held beside the `Project` and travels with it across a
 //! same-store reopen, which builds a new [`crate::state::ActiveProject`] around the same
-//! directory (design M20). It owns the write lock, the label-read lock, the store handle and
+//! directory. It owns the write lock, the label-read lock, the store handle and
 //! its registration, reservation leases, the journal protocol, invalidation, the version bump,
 //! and event publication. Routes translate wire types and call [`ProjectEditCoordinator::execute`].
 
@@ -19,9 +19,9 @@ use cellstudio_core::labels::{
 };
 use cellstudio_core::reader::ImageReader;
 use cellstudio_db::queries::{
-    CellChange, CellRow, ChunkSnapshot, EditDomain, ExtentDelta, ExtentRow, MaskInverse,
+    CellChange, CellRow, ChunkSnapshot, EditDomain, ExtentDelta, ExtentRow, GraphStep, MaskInverse,
 };
-use cellstudio_db::{DbError, Project};
+use cellstudio_db::{DbError, GraphCommit, GraphError, Project};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,9 +33,9 @@ use crate::wire::VersionsWire;
 pub const RESERVE_DEFAULT: u32 = 64;
 /// One request may not drain the id space.
 const RESERVE_MAX: u32 = 4096;
-/// Mask edits whose chunk snapshots stay undoable (design M7).
+/// Mask edits whose chunk snapshots stay undoable.
 const BLOB_KEEP: u32 = 50;
-/// Stamps per stroke; the client flushes at this bound (design M4).
+/// Stamps per stroke; the client flushes at this bound.
 const MAX_STAMPS: usize = 4096;
 
 #[derive(Debug, thiserror::Error)]
@@ -59,11 +59,8 @@ pub enum EditError {
     NothingTo(&'static str),
     #[error("edit {0} is past the undo window: its chunk snapshots were pruned")]
     Pruned(i64),
-    #[error(
-        "undo of a graph edit is not implemented: nothing writes a graph journal row yet, \
-         so edit {0} should not exist"
-    )]
-    GraphDomain(i64),
+    #[error(transparent)]
+    Graph(#[from] GraphError),
     #[error("journal row {seq} is not readable: {source}")]
     Journal { seq: i64, source: serde_json::Error },
 }
@@ -86,8 +83,39 @@ pub struct Stroke {
 pub enum MaskCommand {
     Stroke(Stroke),
     Delete { t: u64, label: u32 },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum GraphCommand {
+    Link {
+        parent_id: u32,
+        child_id: u32,
+    },
+    Unlink {
+        cell_id: u32,
+    },
+    /// Cut one link, splitting its chain rather than deleting the whole track.
+    Cut {
+        parent_id: u32,
+        child_id: u32,
+    },
+}
+
+/// The coordinator's one external mutation interface Undo and redo dispatch on
+/// the journal row's domain, so they are commands of their own rather than mask or graph ones.
+#[derive(Debug, Clone)]
+pub enum EditCommand {
+    Mask(MaskCommand),
+    Graph(GraphCommand),
     Undo,
     Redo,
+}
+
+/// One committed edit, discriminated the way the wire result is.
+#[derive(Debug, Clone)]
+pub enum EditOutcome {
+    Mask(MaskCommit),
+    Graph(GraphCommit),
 }
 
 /// What one committed edit tells the renderer.
@@ -100,10 +128,14 @@ pub struct MaskCommit {
     /// Cells that no longer exist: erased to nothing, or deleted.
     pub removed: Vec<u32>,
     pub chunks: Vec<String>,
+    /// `version.graph` after the commit, when the mask edit changed the graph too.
+    pub graph_version: Option<u64>,
+    /// Track ids the graph step touched, when it did.
+    pub affected_tracks: Option<Vec<u32>>,
 }
 
 /// The forward op, replayed by redo and read by recovery for the box its coarse levels
-/// have to be regenerated over (design M6).
+/// have to be regenerated over.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum MaskOp {
@@ -140,17 +172,17 @@ impl MaskOp {
 
 /// Owns the mask write path for one project: the write lock, the label store handle and its
 /// registration, id leases, the journal protocol, cache invalidation and event publication.
-/// Held by the `Project`, so a same-store reopen keeps one lock (design M20).
+/// Held by the `Project`, so a same-store reopen keeps one lock.
 pub struct ProjectEditCoordinator {
     project: Arc<Project>,
     events: EventBus,
     /// One writer at a time over `labels.zarr` and the journal.
     write: Mutex<()>,
     /// Label reads take the read side for the span of an assembly, so a plane is never mixed
-    /// from pre- and post-edit bricks (design M9).
+    /// from pre- and post-edit bricks.
     reads: RwLock<()>,
     store: Mutex<Option<Arc<LabelStore>>>,
-    /// Reserved id blocks `(first, count)` per session (design M10).
+    /// Reserved id blocks `(first, count)` per session.
     leases: Mutex<HashMap<String, Vec<(u32, u32)>>>,
 }
 
@@ -184,7 +216,7 @@ impl ProjectEditCoordinator {
     }
 
     /// A block of ids this session may paint with. Creates no label store: selecting the
-    /// brush on a project the user never paints leaves nothing behind (design M1, M10).
+    /// brush on a project the user never paints leaves nothing behind.
     pub fn reserve(&self, session: &str, count: u32) -> Result<(u32, u32), EditError> {
         let count = count.clamp(1, RESERVE_MAX);
         let first = self.project.db.reserve_label_ids(count)?;
@@ -202,25 +234,75 @@ impl ProjectEditCoordinator {
         &self,
         image: &Arc<ImageReader>,
         session: &str,
-        command: MaskCommand,
-    ) -> Result<MaskCommit, EditError> {
+        command: EditCommand,
+    ) -> Result<EditOutcome, EditError> {
+        // every write waits for the adopted store's inventory: until the marker commits,
+        // any write races the scan and any undo touches unrecorded labels
+        if self.project.db.inventory_pending()? {
+            return Err(EditError::Db(DbError::InventoryPending));
+        }
         let _write = self.write.lock();
         match command {
-            MaskCommand::Stroke(stroke) => self.stroke(image, session, stroke),
-            MaskCommand::Delete { t, label } => self.delete(image, session, t, label),
-            MaskCommand::Undo => self.step(image, session, true),
-            MaskCommand::Redo => self.step(image, session, false),
+            EditCommand::Mask(MaskCommand::Stroke(stroke)) => {
+                self.stroke(image, session, stroke).map(EditOutcome::Mask)
+            }
+            EditCommand::Mask(MaskCommand::Delete { t, label }) => {
+                self.delete(image, session, t, label).map(EditOutcome::Mask)
+            }
+            EditCommand::Graph(command) => self.graph(session, command),
+            EditCommand::Undo => self.step(image, session, true),
+            EditCommand::Redo => self.step(image, session, false),
         }
+    }
+
+    /// Link and Unlink: one call into the graph module's one-transaction commit, then the
+    /// session-scoped event fan-out.
+    fn graph(&self, session: &str, command: GraphCommand) -> Result<EditOutcome, EditError> {
+        let commit = match command {
+            GraphCommand::Link {
+                parent_id,
+                child_id,
+            } => self.project.db.graph_link(parent_id, child_id)?,
+            GraphCommand::Unlink { cell_id } => self.project.db.graph_unlink(cell_id)?,
+            GraphCommand::Cut {
+                parent_id,
+                child_id,
+            } => self.project.db.graph_cut(parent_id, child_id)?,
+        };
+        self.announce_graph(
+            session,
+            commit.graph_version,
+            commit.affected_tracks.clone(),
+        );
+        self.announce_versions(session);
+        Ok(EditOutcome::Graph(commit))
     }
 
     /// Rolls back every edit a crash left `pending`, oldest first: the level-0 objects, then
     /// the coarse levels regenerated from them, then the row.
     /// Restoring level 0 alone would leave the coarse levels holding the uncommitted stroke
-    /// (design M6).
+    ///.
     pub fn recover(&self, image: &Dataset) -> Result<usize, EditError> {
         let pending = self.project.db.pending_edits()?;
         if pending.is_empty() {
             return Ok(0);
+        }
+        // a pending row snapshots the store it was journaled against; when the store on
+        // disk is not the one the inventory marker covers, restoring those bytes would
+        // write another store's data — drop the rows and let the inventory rebuild
+        if self.project.has_labels() {
+            let identity =
+                cellstudio_db::inventory::store_identity(&self.project.labels_store_path());
+            if identity.is_none() || identity != self.project.db.inventory_marker()? {
+                for record in &pending {
+                    self.project.db.delete_edit(record.seq)?;
+                }
+                tracing::warn!(
+                    dropped = pending.len(),
+                    "dropped pending mask edits journaled against a replaced label store"
+                );
+                return Ok(0);
+            }
         }
         let _write = self.write.lock();
         let store = self.open(image)?.ok_or(EditError::NoStore("recover"))?;
@@ -232,7 +314,9 @@ impl ProjectEditCoordinator {
             labels::regenerate_coarse(&store, op.t(), op.bbox())?;
             // a pending row means the commit transaction never ran, so the database was never
             // changed and only the version bump is owed
-            self.project.db.commit_edit(record.seq, op.t(), &[], &[])?;
+            self.project
+                .db
+                .commit_edit(record.seq, op.t(), &[], &[], GraphStep::Rematerialize)?;
             self.project.db.delete_edit(record.seq)?;
             rolled += 1;
             tracing::info!(seq = record.seq, "rolled back an interrupted mask edit");
@@ -303,9 +387,17 @@ impl ProjectEditCoordinator {
         };
         let seq = self.journal(&op, &snaps)?;
         let t = op.t();
-        self.finish(image, session, &store, seq, &op, &snaps, true, |store| {
-            labels::apply(store, t, &spec)
-        })
+        self.finish(
+            image,
+            session,
+            &store,
+            seq,
+            &op,
+            &snaps,
+            true,
+            GraphStep::Rematerialize,
+            |store| labels::apply(store, t, &spec),
+        )
     }
 
     fn delete(
@@ -335,9 +427,17 @@ impl ProjectEditCoordinator {
         let snaps = labels::snapshot(&store, &chunks)?;
         let op = MaskOp::Delete { t, label, bbox };
         let seq = self.journal(&op, &snaps)?;
-        self.finish(image, session, &store, seq, &op, &snaps, true, |store| {
-            labels::clear_label(store, t, label, bbox)
-        })
+        self.finish(
+            image,
+            session,
+            &store,
+            seq,
+            &op,
+            &snaps,
+            true,
+            GraphStep::Rematerialize,
+            |store| labels::clear_label(store, t, label, bbox),
+        )
     }
 
     /// Design M6 steps 3-6 plus M8's coarse regeneration, shared by stroke, delete and redo.
@@ -354,6 +454,7 @@ impl ProjectEditCoordinator {
         op: &MaskOp,
         snaps: &[labels::ChunkSnapshot],
         fresh: bool,
+        graph: GraphStep<'_>,
         write: impl FnOnce(&LabelStore) -> Result<EditFootprint, LabelError>,
     ) -> Result<MaskCommit, EditError> {
         let t = op.t();
@@ -365,11 +466,11 @@ impl ProjectEditCoordinator {
             let coarse = labels::regenerate_coarse(store, t, op.bbox())?;
             for delta in &footprint.deltas {
                 // a label this edit overwrote may have no row yet: seed it from the store as
-                // it was, which is the post-edit scan less this edit's own delta (design M17)
+                // it was, which is the post-edit scan less this edit's own delta.
                 self.seed_from_delta(store, t, delta)?;
             }
             let deltas = extent_deltas(&footprint);
-            let commit = self.project.db.commit_edit(seq, t, &deltas, &[])?;
+            let commit = self.project.db.commit_edit(seq, t, &deltas, &[], graph)?;
             if fresh {
                 self.project.db.prune_blobs(BLOB_KEEP)?;
             }
@@ -384,6 +485,8 @@ impl ProjectEditCoordinator {
                     cells: updated(&commit.cells),
                     removed: removed(&commit.cells),
                     chunks: chunks.clone(),
+                    graph_version: commit.graph_version,
+                    affected_tracks: commit.graph.as_ref().map(|d| d.affected_tracks()),
                 },
                 chunks,
             ))
@@ -392,7 +495,7 @@ impl ProjectEditCoordinator {
         match result {
             Ok((commit, chunks)) => {
                 drop(_reads);
-                self.announce(session, LayerId::Labels, chunks, commit.version);
+                self.announce(session, LayerId::Labels, chunks, &commit);
                 Ok(commit)
             }
             Err(e) => {
@@ -402,14 +505,14 @@ impl ProjectEditCoordinator {
         }
     }
 
-    /// Undo restores the journaled bytes; redo re-executes the forward op. Rasterization is
-    /// deterministic and a new edit clears the redo stack (design M7).
+    /// The unified undo/redo: the newest un-undone (or oldest undone) row whatever its
+    /// domain, dispatched on it.
     fn step(
         &self,
         image: &Arc<ImageReader>,
         session: &str,
         undo: bool,
-    ) -> Result<MaskCommit, EditError> {
+    ) -> Result<EditOutcome, EditError> {
         let next = match undo {
             true => self.project.db.undo_next()?,
             false => self.project.db.redo_next()?,
@@ -417,9 +520,33 @@ impl ProjectEditCoordinator {
         let Some(record) = next else {
             return Err(EditError::NothingTo(if undo { "undo" } else { "redo" }));
         };
-        if record.domain != EditDomain::Mask {
-            return Err(EditError::GraphDomain(record.seq));
+        match record.domain {
+            EditDomain::Mask => self
+                .step_mask(image, session, record, undo)
+                .map(EditOutcome::Mask),
+            EditDomain::Graph => {
+                let commit = self.project.db.graph_step(record.seq, undo)?;
+                self.announce_graph(
+                    session,
+                    commit.graph_version,
+                    commit.affected_tracks.clone(),
+                );
+                self.announce_versions(session);
+                Ok(EditOutcome::Graph(commit))
+            }
         }
+    }
+
+    /// Undo restores the journaled bytes; redo re-executes the forward op. Rasterization is
+    /// deterministic and a new edit clears the redo stack The journaled graph
+    /// delta, when present, is reapplied exactly rather than re-materialized.
+    fn step_mask(
+        &self,
+        image: &Arc<ImageReader>,
+        session: &str,
+        record: cellstudio_db::EditRecord,
+        undo: bool,
+    ) -> Result<MaskCommit, EditError> {
         if !record.undoable {
             return Err(EditError::Pruned(record.seq));
         }
@@ -447,6 +574,7 @@ impl ProjectEditCoordinator {
                 &op,
                 &snaps,
                 false,
+                GraphStep::Redo(inverse.graph.as_ref()),
                 |store| match &forward {
                     Replay::Stroke(spec) => labels::apply(store, t, spec),
                     Replay::Delete { label, bbox } => labels::clear_label(store, t, *label, *bbox),
@@ -460,36 +588,47 @@ impl ProjectEditCoordinator {
             let _reads = self.reads.write();
             labels::restore(&store, &snaps)?;
             let coarse = labels::regenerate_coarse(&store, t, op.bbox())?;
-            let commit =
-                self.project
-                    .db
-                    .commit_edit(record.seq, t, &inverse.deltas, &inverse.cells)?;
+            let commit = self.project.db.commit_edit(
+                record.seq,
+                t,
+                &inverse.deltas,
+                &inverse.cells,
+                GraphStep::Undo(inverse.graph.as_ref()),
+            )?;
             self.project.db.mark_undone(record.seq, true)?;
             let touched = [restored_keys(&snaps), coarse].concat();
             let chunks = self.invalidate(image, &touched);
             (commit, chunks)
         };
-        self.announce(session, LayerId::Labels, chunks.clone(), commit.version);
-        Ok(MaskCommit {
+        let commit = MaskCommit {
             seq: record.seq,
             version: commit.version,
             has_labels: true,
             cells: updated(&commit.cells),
             removed: removed(&commit.cells),
             chunks,
-        })
+            graph_version: commit.graph_version,
+            affected_tracks: commit.graph.as_ref().map(|d| d.affected_tracks()),
+        };
+        self.announce(session, LayerId::Labels, commit.chunks.clone(), &commit);
+        Ok(commit)
     }
 
     /// Adopts the store the project already has, or creates one, registering it on the live
-    /// reader so the very first stroke is readable without re-opening the project (design M1).
+    /// reader so the very first stroke is readable without re-opening the project.
     fn ensure(&self, image: &Arc<ImageReader>) -> Result<Arc<LabelStore>, EditError> {
         if let Some(store) = self.store.lock().clone() {
             return Ok(store);
         }
+        let creating = !self.project.has_labels();
         let store = Arc::new(labels::ensure_store(
             &self.project.labels_store_path(),
             image.dataset(),
         )?);
+        // a store the app created is empty: its inventory is trivially complete
+        if creating && let Some(identity) = cellstudio_db::inventory::store_identity(store.root()) {
+            self.project.db.set_inventory_marker(&identity)?;
+        }
         *self.store.lock() = Some(store.clone());
         if image.bricks().layer(LayerId::Labels).is_none() {
             image.register_layer(LayerId::Labels, Arc::new(store.open_readable()?));
@@ -515,7 +654,7 @@ impl ProjectEditCoordinator {
 
     /// A stroke may name an id that already exists on that frame, or one from a block this
     /// session reserved. Returns whether the id came from a lease, which is the case that
-    /// needs no seeding scan: a leased id is absent from the store (design M10).
+    /// needs no seeding scan: a leased id is absent from the store.
     fn authorize(&self, session: &str, t: u64, label: u32) -> Result<bool, EditError> {
         if label == 0 {
             return Err(EditError::Invalid("0 is background, not a cell".into()));
@@ -542,7 +681,7 @@ impl ProjectEditCoordinator {
 
     /// One bounded frame scan per `(t, label)` the session did not paint, so an adopted
     /// cell's area and centroid stay exact rather than counting this session's voxels only
-    /// (design M17). A freshly reserved id has nothing to scan.
+    /// A freshly reserved id has nothing to scan.
     fn seed(
         &self,
         store: &LabelStore,
@@ -611,25 +750,45 @@ impl ProjectEditCoordinator {
     }
 
     /// Drops the resident bricks and bumps their epochs, so an in-flight decode that read
-    /// pre-edit bytes cannot publish them after the write (design M9).
+    /// pre-edit bytes cannot publish them after the write.
     fn invalidate(&self, image: &Arc<ImageReader>, keys: &[ChunkKey]) -> Vec<String> {
         let bricks: Vec<BrickKey> = keys.iter().map(|key| key.brick(LayerId::Labels)).collect();
         image.bricks().invalidate(&bricks);
         keys.iter().map(encode_chunk).collect()
     }
 
-    fn announce(&self, session: &str, layer: LayerId, chunks: Vec<String>, version: u64) {
+    fn announce(&self, session: &str, layer: LayerId, chunks: Vec<String>, commit: &MaskCommit) {
         self.events.publish(Event::Invalidate {
             session_id: session.to_owned(),
             layer,
             chunks,
-            version,
+            version: commit.version,
         });
+        // a topology-changing mask commit announces the graph too.
+        if let Some(graph_version) = commit.graph_version {
+            self.announce_graph(
+                session,
+                graph_version,
+                commit.affected_tracks.clone().unwrap_or_default(),
+            );
+        }
+        self.announce_versions(session);
+    }
+
+    fn announce_graph(&self, session: &str, graph_version: u64, tracks: Vec<u32>) {
+        self.events.publish(Event::GraphChanged {
+            session_id: session.to_owned(),
+            graph_version,
+            tracks,
+        });
+    }
+
+    fn announce_versions(&self, session: &str) {
         match self.project.db.versions() {
             Ok(versions) => self.events.publish(Event::Versions {
                 versions: VersionsWire::new(session, versions),
             }),
-            Err(e) => tracing::error!("cannot read versions after a mask edit: {e}"),
+            Err(e) => tracing::error!("cannot read versions after an edit: {e}"),
         }
     }
 
@@ -851,7 +1010,7 @@ fn to_db_extent(row: &labels::ExtentRow) -> ExtentRow {
 }
 
 /// The store as it was before this edit, from a scan of it as it is now: exact, and it costs
-/// the one frame scan design M17 budgets rather than a second one before the write.
+/// one frame scan rather than a second one before the write.
 fn before_edit(after: &labels::ExtentRow, delta: &LabelDelta) -> ExtentRow {
     let area = (after.area as i64 - delta.area).max(0) as u64;
     ExtentRow {

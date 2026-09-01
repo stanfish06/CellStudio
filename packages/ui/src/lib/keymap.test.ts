@@ -4,6 +4,7 @@ import {
   RESET_VIEW_KEY,
   SHORTCUTS,
   TOOL_KEYS,
+  UNLINK_KEY,
   isPaintTool,
   isToolEnabled,
   isTypingTarget,
@@ -41,16 +42,24 @@ describe('resolveKey', () => {
     }
   })
 
-  it('enables the paint tools and leaves the unshipped ones disabled', () => {
+  it('enables the paint and link tools and leaves the unshipped ones disabled', () => {
     expect(resolveKey({ key: 'B' })).toEqual({ kind: 'tool', tool: 'brush' })
     expect(isToolEnabled('brush')).toBe(true)
     expect(isToolEnabled('eraser')).toBe(true)
+    expect(isToolEnabled('link')).toBe(true)
     expect(isToolEnabled('fill')).toBe(false)
-    expect(isToolEnabled('cut')).toBe(false)
     expect(isToolEnabled('pointer')).toBe(true)
     expect(isPaintTool('brush')).toBe(true)
     expect(isPaintTool('eraser')).toBe(true)
     expect(isPaintTool('pointer')).toBe(false)
+  })
+
+  it('resolves the unlink action on either case of X — an action, never a tool', () => {
+    expect(UNLINK_KEY).toBe('X')
+    expect(resolveKey({ key: 'X' })).toEqual({ kind: 'unlink' })
+    expect(resolveKey({ key: 'x' })).toEqual({ kind: 'unlink' })
+    expect(resolveKey({ key: 'x', metaKey: true })).toBeNull()
+    expect(Object.values(TOOL_KEYS)).not.toContain(UNLINK_KEY)
   })
 
   it('adjusts the brush radius on both spellings of - and =', () => {

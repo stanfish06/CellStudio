@@ -2,7 +2,7 @@
 //! rasterization contract every consumer derives from, and chunk-granular writes with
 //! byte-exact snapshots behind them.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1043,12 +1043,48 @@ fn sample_region(
     Ok(out)
 }
 
+/// Per-chunk visitor: `(origin, shape, values)`.
+type ChunkVisitor<'a> = dyn FnMut([u64; 3], [u64; 3], &[u32]) + 'a;
+
+/// One full chunk walk of `level` at frame `t`: `f(origin, shape, values)` once per chunk,
+/// in grid order. The one raster loop [`scan_label`] and [`scan_inventory`] share.
+fn for_each_frame_chunk(
+    level: &LabelLevel,
+    t: u64,
+    f: &mut ChunkVisitor<'_>,
+) -> Result<(), LabelError> {
+    let grid = level.grid();
+    for gz in 0..grid[0] {
+        for gy in 0..grid[1] {
+            for gx in 0..grid[2] {
+                let cell = [gz, gy, gx];
+                let values = level.read_chunk(t, cell)?;
+                f(level.origin(cell), level.shape(cell), &values);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn fold_voxel(row: &mut ExtentRow, zyx: [u64; 3]) {
+    row.area += 1;
+    row.sum_z += zyx[0] as f64;
+    row.sum_y += zyx[1] as f64;
+    row.sum_x += zyx[2] as f64;
+    row.bbox = Some(match row.bbox {
+        Some(mut b) => {
+            b.grow(zyx);
+            b
+        }
+        None => VoxelBox::point(zyx),
+    });
+}
+
 /// One bounded frame scan producing the exact bbox, area and centroid sums for a label
 /// this session did not paint — what `ensure_extent` calls once per `(t, label)`.
 pub fn scan_label(store: &LabelStore, t: u64, label: u32) -> Result<ExtentRow, LabelError> {
     store.check_t(t)?;
     let level = store.level(0)?;
-    let grid = level.grid();
     let mut row = ExtentRow {
         t,
         label,
@@ -1061,37 +1097,89 @@ pub fn scan_label(store: &LabelStore, t: u64, label: u32) -> Result<ExtentRow, L
     if label == 0 {
         return Ok(row);
     }
-    for gz in 0..grid[0] {
-        for gy in 0..grid[1] {
-            for gx in 0..grid[2] {
-                let cell = [gz, gy, gx];
-                let origin = level.origin(cell);
-                let shape = level.shape(cell);
-                let values = level.read_chunk(t, cell)?;
-                for (index, value) in values.iter().enumerate() {
-                    if *value != label {
-                        continue;
-                    }
-                    let i = index as u64;
-                    let zyx = [
+    for_each_frame_chunk(level, t, &mut |origin, shape, values| {
+        for (index, value) in values.iter().enumerate() {
+            if *value != label {
+                continue;
+            }
+            let i = index as u64;
+            fold_voxel(
+                &mut row,
+                [
+                    origin[0] + i / (shape[1] * shape[2]),
+                    origin[1] + (i / shape[2]) % shape[1],
+                    origin[2] + i % shape[2],
+                ],
+            );
+        }
+    })?;
+    Ok(row)
+}
+
+/// Everything one full level-0 scan of an adopted store learns: one exact [`ExtentRow`] per
+/// `(frame, label)` occurrence, the highest id present, and the violations found.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Inventory {
+    /// Sorted by `(t, label)`.
+    pub rows: Vec<ExtentRow>,
+    pub max_id: u32,
+    /// Ids past [`MAX_LABEL_ID`], sorted.
+    pub oversized: Vec<u32>,
+    /// Ids present on more than one frame, sorted; the store contract is one id per frame.
+    pub multi_frame: Vec<u32>,
+}
+
+/// One pass over every level-0 chunk, frame by frame. `progress` is called once per
+/// finished frame with the fraction complete.
+pub fn scan_inventory(store: &LabelStore, progress: &dyn Fn(f32)) -> Result<Inventory, LabelError> {
+    let level = store.level(0)?;
+    let frames = level.dims.t;
+    let mut inventory = Inventory::default();
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut oversized: BTreeSet<u32> = BTreeSet::new();
+    let mut multi_frame: BTreeSet<u32> = BTreeSet::new();
+    for t in 0..frames {
+        let mut frame: HashMap<u32, ExtentRow> = HashMap::new();
+        for_each_frame_chunk(level, t, &mut |origin, shape, values| {
+            for (index, value) in values.iter().enumerate() {
+                if *value == 0 {
+                    continue;
+                }
+                let i = index as u64;
+                let row = frame.entry(*value).or_insert(ExtentRow {
+                    t,
+                    label: *value,
+                    bbox: None,
+                    area: 0,
+                    sum_z: 0.0,
+                    sum_y: 0.0,
+                    sum_x: 0.0,
+                });
+                fold_voxel(
+                    row,
+                    [
                         origin[0] + i / (shape[1] * shape[2]),
                         origin[1] + (i / shape[2]) % shape[1],
                         origin[2] + i % shape[2],
-                    ];
-                    row.area += 1;
-                    row.sum_z += zyx[0] as f64;
-                    row.sum_y += zyx[1] as f64;
-                    row.sum_x += zyx[2] as f64;
-                    row.bbox = Some(match row.bbox {
-                        Some(mut b) => {
-                            b.grow(zyx);
-                            b
-                        }
-                        None => VoxelBox::point(zyx),
-                    });
-                }
+                    ],
+                );
             }
+        })?;
+        let mut rows: Vec<ExtentRow> = frame.into_values().collect();
+        rows.sort_unstable_by_key(|row| row.label);
+        for row in rows {
+            inventory.max_id = inventory.max_id.max(row.label);
+            if u64::from(row.label) > MAX_LABEL_ID {
+                oversized.insert(row.label);
+            }
+            if !seen.insert(row.label) {
+                multi_frame.insert(row.label);
+            }
+            inventory.rows.push(row);
         }
+        progress((t + 1) as f32 / frames.max(1) as f32);
     }
-    Ok(row)
+    inventory.oversized = oversized.into_iter().collect();
+    inventory.multi_frame = multi_frame.into_iter().collect();
+    Ok(inventory)
 }

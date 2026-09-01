@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
+use axum::Json;
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use cellstudio_db::queries::Bbox;
 use serde::Deserialize;
 
-use crate::edit::MaskCommand;
+use crate::auth::json_body;
+use crate::edit::{EditCommand, GraphCommand};
 use crate::error::{ApiError, ApiResult};
 use crate::routes::mask;
 use crate::routes::project::session_json;
@@ -68,17 +71,87 @@ pub async fn edits(
     Ok(session_json(&active.session_id, wire))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkBody {
+    parent_id: u32,
+    child_id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlinkBody {
+    cell_id: u32,
+}
+
+/// Session-fenced like every mask mutation; the coordinator commits validation, the link,
+/// re-materialization, journal row and version bump in one transaction.
+pub async fn link(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<Json<LinkBody>, JsonRejection>,
+) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    let body = json_body(body)?;
+    mask::run(
+        &state,
+        active,
+        EditCommand::Graph(GraphCommand::Link {
+            parent_id: body.parent_id,
+            child_id: body.child_id,
+        }),
+    )
+    .await
+}
+
+/// Unlink is addressed by the selected cell; its maximal unbranched chain is derived inside
+/// the transaction.
+pub async fn unlink(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<Json<UnlinkBody>, JsonRejection>,
+) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    let body = json_body(body)?;
+    mask::run(
+        &state,
+        active,
+        EditCommand::Graph(GraphCommand::Unlink {
+            cell_id: body.cell_id,
+        }),
+    )
+    .await
+}
+
+/// Cutting one link splits its chain; Unlink deletes a whole one.
+pub async fn cut(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<Json<LinkBody>, JsonRejection>,
+) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    let body = json_body(body)?;
+    mask::run(
+        &state,
+        active,
+        EditCommand::Graph(GraphCommand::Cut {
+            parent_id: body.parent_id,
+            child_id: body.child_id,
+        }),
+    )
+    .await
+}
+
 /// The unified undo: the newest un-undone row whatever its domain, dispatched on it by the
-/// coordinator. The mask arm is implemented; the graph arm is unreachable until something can
-/// write a `domain = 'graph'` row (design M7).
+/// coordinator.
 pub async fn undo(State(state): State<Arc<AppState>>, headers: HeaderMap) -> ApiResult<Response> {
     let active = mask::fenced(&state, &headers)?;
-    mask::run(&state, active, MaskCommand::Undo).await
+    mask::run(&state, active, EditCommand::Undo).await
 }
 
 pub async fn redo(State(state): State<Arc<AppState>>, headers: HeaderMap) -> ApiResult<Response> {
     let active = mask::fenced(&state, &headers)?;
-    mask::run(&state, active, MaskCommand::Redo).await
+    mask::run(&state, active, EditCommand::Redo).await
 }
 
 fn parse_bbox(raw: &str) -> ApiResult<Bbox> {

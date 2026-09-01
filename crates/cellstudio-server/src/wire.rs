@@ -4,7 +4,9 @@ use cellstudio_core::reader::Histogram;
 use cellstudio_db::queries::{CellRow, EditEntry, LineageTree, LinkRow, Versions};
 use serde::Serialize;
 
-use crate::edit::MaskCommit;
+use cellstudio_db::GraphCommit;
+
+use crate::edit::{EditOutcome, MaskCommit};
 
 pub const SESSION_HEADER: &str = "x-cellstudio-session";
 pub const SHAPE_HEADER: &str = "x-cellstudio-shape";
@@ -152,6 +154,8 @@ pub struct ProjectInfo {
     pub versions: VersionsWire,
     pub layout: LayoutAdvisory,
     pub has_labels: bool,
+    /// Any `links` row exists — a snapshot at open/refetch, like the version counters.
+    pub has_graph: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,6 +169,7 @@ pub struct CellRowWire {
     pub confidence: Option<f64>,
     pub state: Option<&'static str>,
     pub track_id: Option<u32>,
+    pub parent_id: Option<u32>,
     pub reviewed: bool,
 }
 
@@ -178,6 +183,7 @@ impl From<&CellRow> for CellRowWire {
             confidence: row.detection_confidence,
             state: row.state.map(|s| s.as_str()),
             track_id: row.track_id,
+            parent_id: row.parent_id,
             reviewed: row.reviewed,
         }
     }
@@ -284,25 +290,50 @@ pub struct LabelLeaseWire {
     pub count: u32,
 }
 
+/// The discriminated result of any mutation through the coordinator. routes and
+/// the api-client dispatch on `domain`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum EditResultWire {
+    Mask(MaskEditWire),
+    Graph(GraphEditWire),
+}
+
+impl EditResultWire {
+    pub fn new(session: &str, outcome: EditOutcome) -> Self {
+        match outcome {
+            EditOutcome::Mask(commit) => Self::Mask(MaskEditWire::new(session, commit)),
+            EditOutcome::Graph(commit) => Self::Graph(GraphEditWire::new(session, commit)),
+        }
+    }
+}
+
 /// What one committed mask edit tells the renderer: the version to advance to, the cells
 /// whose voxels changed, the ids that no longer exist, and the chunks to drop.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MaskEditWire {
+    pub domain: &'static str,
     pub seq: i64,
     pub version: u64,
     pub session_id: String,
     /// The store exists from here on, so the renderer flips its own flag without re-opening
-    /// the project (design M1).
+    /// the project.
     pub has_labels: bool,
     pub cells: Vec<CellRowWire>,
     pub removed: Vec<u32>,
     pub chunks: Vec<String>,
+    /// `version.graph` after the commit, when the mask edit removed cells or links.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affected_tracks: Option<Vec<u32>>,
 }
 
 impl MaskEditWire {
     pub fn new(session: &str, commit: MaskCommit) -> Self {
         Self {
+            domain: "mask",
             seq: commit.seq,
             version: commit.version,
             session_id: session.to_owned(),
@@ -310,6 +341,34 @@ impl MaskEditWire {
             cells: commit.cells.iter().map(CellRowWire::from).collect(),
             removed: commit.removed,
             chunks: commit.chunks,
+            graph_version: commit.graph_version,
+            affected_tracks: commit.affected_tracks,
+        }
+    }
+}
+
+/// What one committed graph edit tells the renderer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEditWire {
+    pub domain: &'static str,
+    pub session_id: String,
+    pub seq: i64,
+    pub graph_version: u64,
+    /// Rows of every cell whose track assignment the edit touched, as committed.
+    pub affected_cells: Vec<CellRowWire>,
+    pub affected_tracks: Vec<u32>,
+}
+
+impl GraphEditWire {
+    pub fn new(session: &str, commit: GraphCommit) -> Self {
+        Self {
+            domain: "graph",
+            session_id: session.to_owned(),
+            seq: commit.seq,
+            graph_version: commit.graph_version,
+            affected_cells: commit.cells.iter().map(CellRowWire::from).collect(),
+            affected_tracks: commit.affected_tracks,
         }
     }
 }

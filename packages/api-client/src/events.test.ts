@@ -172,7 +172,7 @@ describe('EventStream', () => {
     socket.deliverRaw('not json at all')
     expect(seen).toEqual([])
 
-    socket.deliver({ type: 'graphChanged', graphVersion: 9, tracks: [1, 2] })
+    socket.deliver({ type: 'graphChanged', sessionId: 'sess-1', graphVersion: 9, tracks: [1, 2] })
     expect(seen).toEqual(['9'])
     expect(errors).toEqual([])
     stream.close()

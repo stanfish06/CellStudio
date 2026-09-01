@@ -7,7 +7,7 @@ import { paintInput, type PaintHandlers } from './paintInput'
 const ORTHO = new OrthographicView({ id: 'slice', flipY: true })
 
 /** Capture phase, and cancellable: React's synthetic capture fires at the root, while
- * mjolnir listens natively on the deck canvas below this element (design M13). */
+ * mjolnir listens natively on the deck canvas below this element. */
 const CAPTURE: AddEventListenerOptions = { capture: true, passive: false }
 
 const orbitTarget = (state: OrbitViewState): readonly number[] =>
@@ -139,7 +139,7 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
     }
   }, [paint])
 
-  // A stroke is bound to one frame, tool and view; any of them moving ends it (design M4).
+  // A stroke is bound to one frame, tool and view; any of them moving ends it.
   useEffect(() => {
     paint?.cancel()
   }, [paint, t, tool, activeView, sliceIndex])

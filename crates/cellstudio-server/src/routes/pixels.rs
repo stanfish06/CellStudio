@@ -68,7 +68,7 @@ pub async fn slice(
     let active = state.require()?;
     let axis = match query.axis.to_ascii_lowercase().as_str() {
         // the image's XY tiles still come from /store, where viv's multiscale layer reads
-        // them; this path serves label planes and anything else assembled (design M15)
+        // them; this path serves label planes and anything else assembled.
         "xy" => OrthoAxis::XY,
         "xz" => OrthoAxis::XZ,
         "yz" => OrthoAxis::YZ,
@@ -165,7 +165,7 @@ pub async fn pixel(
     let value = state
         .read(move || {
             // a label read never sees a plane mixed from pre- and post-edit bricks; image
-            // reads stay lock-free, since nothing writes them (design M9)
+            // reads stay lock-free, since nothing writes them.
             let _labels = (layer == LayerId::Labels).then(|| labels.read_labels());
             Ok(reader.read_pixel(layer, query.t, query.c, [query.z, query.y, query.x])?)
         })

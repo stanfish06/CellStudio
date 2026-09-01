@@ -16,6 +16,7 @@ axum = { version = "0.8.9", features = ["ws"] }
 bytes = "1.12.1"
 cellstudio-core = { workspace = true }
 cellstudio-db = { workspace = true }
+flate2 = "1.1.9"
 futures = "0.3.34"
 parking_lot = "0.12.5"
 rand = "0.10.2"

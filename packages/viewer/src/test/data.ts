@@ -3,6 +3,8 @@ import type {
   CellRow,
   DeleteMaskBody,
   Dims,
+  EditResult,
+  GraphEditResult,
   LabelLease,
   LayerId,
   Level,
@@ -12,13 +14,14 @@ import type {
   StrokeBody,
   VolumeBuffer,
 } from '@cellstudio/api-client'
-import type { MaskApi, OrthoAxis, PixelApi } from '../data/api'
+import type { GraphApi, MaskApi, OrthoAxis, PixelApi } from '../data/api'
 import type { NavSnapshot } from '../scenes/types'
 import {
   channelStateFrom,
   type ActiveView,
   type ChannelState,
   type OrbitCamera,
+  type PendingLink,
   type Tool,
 } from '../state/nav'
 
@@ -70,8 +73,11 @@ export interface NavOverrides {
   generation?: number
   trail?: number
   selection?: { cellId: number } | null
+  selectedLink?: { parent: number; child: number } | null
+  pendingLink?: PendingLink | null
   tool?: Tool
   labels?: { on: boolean; opacity: number }
+  tracks?: Partial<NavSnapshot['overlays']['tracks']>
 }
 
 export function navSnapshot(project: ProjectInfo, o: NavOverrides = {}): NavSnapshot {
@@ -93,12 +99,21 @@ export function navSnapshot(project: ProjectInfo, o: NavOverrides = {}): NavSnap
     activeChannel: 0,
     overlays: {
       labels: o.labels ?? { on: true, opacity: 0.36 },
-      tracks: { on: true, opacity: 0.85, trail: o.trail ?? 6 },
+      tracks: {
+        on: true,
+        opacity: 0.85,
+        trail: o.trail ?? 6,
+        dotSize: 3,
+        fade: { on: true, max: 1, min: 0.15 },
+        ...o.tracks,
+      },
     },
     brush: { radius: o.brushRadius ?? 8 },
     tool: o.tool ?? 'pointer',
     axisScale: o.axisScale ?? { z: 1, y: 1, x: 1 },
     selection: o.selection ?? null,
+    selectedLink: o.selectedLink ?? null,
+    pendingLink: o.pendingLink ?? null,
     generation: o.generation ?? 1,
   }
 }
@@ -112,6 +127,7 @@ export const cell = (
   t: number,
   centroid: [number, number, number],
   trackId = id,
+  parentId: number | null = null,
 ): CellRow => ({
   id,
   t,
@@ -120,6 +136,7 @@ export const cell = (
   confidence: 0.9,
   state: null,
   trackId,
+  parentId,
   reviewed: false,
 })
 
@@ -143,7 +160,7 @@ export const makeVolume = (z: number, y: number, x: number, level = 2): VolumeBu
   data: new Uint16Array(z * y * x).buffer,
 })
 
-/** Label reads are u32 whatever the image dtype is (design M1). */
+/** Label reads are u32 whatever the image dtype is. */
 export const makeLabelPlane = (height: number, width: number, level = 0): PlaneBuffer => ({
   shape: [height, width],
   channels: 1,
@@ -176,7 +193,7 @@ export interface VolumeCall {
 }
 
 /** Records every call and can hold responses open, for supersession and abort tests. */
-export class FakeApi implements PixelApi, MaskApi {
+export class FakeApi implements PixelApi, MaskApi, GraphApi {
   auto = true
   sliceCalls: SliceCall[] = []
   volumeCalls: VolumeCall[] = []
@@ -193,7 +210,19 @@ export class FakeApi implements PixelApi, MaskApi {
   editCalls: ('undo' | 'redo')[] = []
   /** Rows the next mask edit reports back, for the TrackSource patch path. */
   editedCells: CellRow[] = []
+  /** When set, mask edit results also carry a graph bump (mask delete of a linked cell). */
+  editGraphVersion: number | null = null
+  editAffectedTracks: number[] = []
+  private lastGraphResult: GraphEditResult | null = null
+
+
+  linkCalls: { parentId: number; childId: number }[] = []
+  unlinkCalls: { cellId: number }[] = []
+  cutCalls: { parentId: number; childId: number }[] = []
+  /** When set, link/unlink reject with it — a 409's structured reason in tests. */
+  graphError: unknown = null
   sessionId = 'session-1'
+  graphVersion = 1
   labelVersion = 1
   nextLabelId = 1000
   private pendingEdits: Pending<MaskEditResult>[] = []
@@ -266,13 +295,49 @@ export class FakeApi implements PixelApi, MaskApi {
     return this.settleEdit(`delete:${body.label}`, [body.label])
   }
 
-  undo(): Promise<MaskEditResult> {
+  link(body: { parentId: number; childId: number }): Promise<GraphEditResult> {
+    this.linkCalls.push(body)
+    if (this.graphError) return Promise.reject(this.graphError)
+    return Promise.resolve(this.graphEditResult([body.parentId, body.childId]))
+  }
+
+  unlink(body: { cellId: number }): Promise<GraphEditResult> {
+    this.unlinkCalls.push(body)
+    if (this.graphError) return Promise.reject(this.graphError)
+    return Promise.resolve(this.graphEditResult([body.cellId]))
+  }
+
+  cut(body: { parentId: number; childId: number }): Promise<GraphEditResult> {
+    this.cutCalls.push(body)
+    if (this.graphError) return Promise.reject(this.graphError)
+    return Promise.resolve(this.graphEditResult([body.parentId, body.childId]))
+  }
+
+  private graphEditResult(affected: number[]): GraphEditResult {
+    this.graphVersion += 1
+    const result: GraphEditResult = {
+      domain: 'graph',
+      sessionId: this.sessionId,
+      seq: this.graphVersion,
+      graphVersion: this.graphVersion,
+      affectedCells: this.editedCells,
+      affectedTracks: affected,
+    }
+    return result
+  }
+
+  /** When set, undo/redo answer with this graph-domain result instead. */
+  graphResult?: GraphEditResult
+
+  undo(): Promise<EditResult> {
     this.editCalls.push('undo')
+    if (this.graphResult) return Promise.resolve(this.graphResult)
     return this.settleEdit('undo')
   }
 
-  redo(): Promise<MaskEditResult> {
+  redo(): Promise<EditResult> {
     this.editCalls.push('redo')
+    if (this.graphResult) return Promise.resolve(this.graphResult)
     return this.settleEdit('redo')
   }
 
@@ -311,6 +376,9 @@ export class FakeApi implements PixelApi, MaskApi {
       cells: this.editedCells,
       removed: [],
       chunks: [],
+      ...(this.editGraphVersion !== null
+        ? { graphVersion: this.editGraphVersion, affectedTracks: this.editAffectedTracks }
+        : {}),
     }
   }
 

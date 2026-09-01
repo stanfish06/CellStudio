@@ -6,8 +6,8 @@ export type {
   TrackLookup,
 } from './cursorReadout'
 export { ViewerSession } from './session'
-export type { NavActions, ViewerSessionOptions } from './session'
-export { SliceScene } from './sliceScene'
+export type { GraphAffected, NavActions, ViewerSessionOptions } from './session'
+export { SliceScene, lineageHighlight } from './sliceScene'
 export type { SliceCamera, SliceSceneOptions } from './sliceScene'
 export { Emitter, levelForZoom, sameStatus, visibleChannels } from './types'
 export type { NavSnapshot, SceneStatus, VisibleChannel } from './types'

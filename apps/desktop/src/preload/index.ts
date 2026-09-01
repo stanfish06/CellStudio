@@ -5,6 +5,7 @@ const bridge: CellStudioBridge = {
   getBackendInfo: () => ipcRenderer.invoke(IPC.backendInfo),
   openOnStart: () => ipcRenderer.invoke(IPC.openOnStart),
   openDatasetDialog: () => ipcRenderer.invoke(IPC.openDataset),
+  openTrackingDialog: () => ipcRenderer.invoke(IPC.openTracking),
   onBackendState: (cb) => {
     const handler = (_e: unknown, event: BackendStateEvent) => cb(event)
     ipcRenderer.on(IPC.backendState, handler)
