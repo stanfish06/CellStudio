@@ -174,7 +174,7 @@ fn updated(change: &CellChange) -> &cellstudio_db::CellRow {
 }
 
 #[test]
-fn a_v1_database_migrates_to_v2_with_its_rows_intact() {
+fn a_v1_database_migrates_to_the_current_schema_with_its_rows_intact() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = db_path(dir.path());
     std::fs::create_dir_all(path.parent().expect("parent")).expect("container");
@@ -241,8 +241,15 @@ INSERT INTO edit_blobs(seq, chunk_key, before) VALUES (1, 'c/0/0/0/0/0', x'0102'
         raw(&path)
             .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
             .expect("user_version"),
-        2
+        cellstudio_db::SCHEMA_VERSION
     );
+    // the v3 column is present and empty on migrated rows
+    let cells = Project::create_or_open(&dataset(dir.path()))
+        .expect("reopen")
+        .db
+        .cells_window(0, 9, None)
+        .expect("cells");
+    assert!(cells.iter().all(|c| c.track_labels.is_empty()));
 }
 
 #[test]

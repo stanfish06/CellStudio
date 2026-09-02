@@ -2,7 +2,7 @@ use cellstudio_core::tracks::{CellRecord, ParseError};
 use rusqlite::{Connection, Transaction, params};
 
 use crate::project::{Db, DbError};
-use crate::queries::{MAX_LABEL_ID, VersionCounter, bump_in};
+use crate::queries::{MAX_LABEL_ID, VersionCounter, bump_in, labels_text};
 
 /// Staging mirrors the tracking file, not the project: `id` is the file's cell id, which
 /// only becomes a project id at materialization.
@@ -94,10 +94,8 @@ fn stage_cell(stmt: &mut rusqlite::Statement<'_>, record: &CellRecord) -> Result
         Some([z, y, x]) => [Some(z), Some(y), Some(x)],
         None => [None; 3],
     };
-    let labels = match record.labels.is_empty() {
-        true => None,
-        false => Some(serde_json::to_string(&record.labels).map_err(DbError::from)?),
-    };
+    let labels = labels_text(&record.labels);
+    let track_labels = labels_text(&record.track_labels);
     let features = match record.features.is_empty() {
         true => None,
         false => Some(serde_json::to_string(&record.features).map_err(DbError::from)?),
@@ -114,6 +112,7 @@ fn stage_cell(stmt: &mut rusqlite::Statement<'_>, record: &CellRecord) -> Result
         record.state.map(|s| s.as_str()),
         labels,
         features,
+        track_labels,
     ])
     .map_err(|e| match is_unique_violation(&e) {
         true => StageError::DuplicateCell(record.id),
@@ -164,8 +163,8 @@ impl Db {
                         .prepare_cached(
                             "INSERT INTO staging_cells(id, t, z, y, x, seg_id, track_id,
                                                        detection_confidence, state, labels,
-                                                       features)
-                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                                       features, track_labels)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                         )
                         .map_err(DbError::from)?;
                     let mut link = tx
@@ -365,7 +364,13 @@ impl Db {
     /// inventory already created are updated in place by id (centroid only where the file
     /// provides one), rows without a mask are inserted, links carry their confidence,
     /// `version.graph` bumps, and staging clears.
-    pub fn materialize_staged(&self) -> Result<GraphSummary, DbError> {
+    /// `definitions` and `colors` are the file's `metadata.label_definitions` and
+    /// `metadata.label_colors`; every label on a staged cell joins the project vocabulary too.
+    pub fn materialize_staged(
+        &self,
+        definitions: &[String],
+        colors: &std::collections::BTreeMap<String, String>,
+    ) -> Result<GraphSummary, DbError> {
         let mut guard = self.conn()?;
         let tx = guard.transaction()?;
         let count = |tx: &Transaction<'_>, sql: &str| -> Result<u64, DbError> {
@@ -392,9 +397,9 @@ impl Db {
         // guarantees id == voxel value, so no remapping happens here.
         tx.execute(
             "INSERT INTO cells(id, t, z, y, x, detection_confidence, state, track_id,
-                               src_id, seg_id, labels, features)
+                               src_id, seg_id, labels, features, track_labels)
              SELECT id, t, z, y, x, detection_confidence, state, track_id,
-                    id, seg_id, labels, features
+                    id, seg_id, labels, features, track_labels
                FROM staging_cells WHERE true
              ON CONFLICT(id) DO UPDATE SET
                t = excluded.t,
@@ -407,7 +412,8 @@ impl Db {
                src_id = excluded.src_id,
                seg_id = excluded.seg_id,
                labels = excluded.labels,
-               features = excluded.features",
+               features = excluded.features,
+               track_labels = excluded.track_labels",
             [],
         )?;
         // both declaring sides agree by validation, so DISTINCT collapses them to one row
@@ -416,6 +422,19 @@ impl Db {
              SELECT DISTINCT parent, child, confidence FROM staging_links",
             [],
         )?;
+        let mut names: Vec<String> = definitions.to_vec();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT labels, track_labels FROM staging_cells
+                  WHERE labels IS NOT NULL OR track_labels IS NOT NULL",
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                names.extend(crate::queries::parse_labels(row.get(0)?)?);
+                names.extend(crate::queries::parse_labels(row.get(1)?)?);
+            }
+        }
+        crate::project::merge_label_definitions_in(&tx, &names, colors)?;
         clear_staging_in(&tx)?;
         bump_in(&tx, VersionCounter::Graph)?;
         tx.commit()?;

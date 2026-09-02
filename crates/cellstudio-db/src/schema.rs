@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use crate::project::DbError;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 const TABLES_V1: &str = r#"
 CREATE TABLE cells (
@@ -81,6 +81,12 @@ ALTER TABLE edit_blobs_v2 RENAME TO edit_blobs;
 CREATE INDEX edit_blobs_by_seq ON edit_blobs(seq);
 "#;
 
+/// v2 → v3: track-scope labels live per cell, like cell-scope ones.
+const TABLES_V3: &str = r#"
+ALTER TABLE cells ADD COLUMN track_labels TEXT;   -- JSON array, NULL when empty
+ALTER TABLE staging_cells ADD COLUMN track_labels TEXT;
+"#;
+
 const SEED_META: &str = r#"
 INSERT OR IGNORE INTO meta(key, value) VALUES
   ('version.image', '0'),
@@ -94,11 +100,12 @@ pub fn migrate(conn: &Connection) -> Result<(), DbError> {
     let found: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     let statements = match found {
         0 => format!(
-            "{TABLES_V1}{}{SEED_META}{TABLES_V2}",
+            "{TABLES_V1}{}{SEED_META}{TABLES_V2}{TABLES_V3}",
             crate::import::STAGING_TABLES
         ),
         // a project already at 1 keeps its rows: v2 only adds tables and columns
-        1 => TABLES_V2.to_string(),
+        1 => format!("{TABLES_V2}{TABLES_V3}"),
+        2 => TABLES_V3.to_string(),
         v if v == SCHEMA_VERSION => return Ok(()),
         found => {
             return Err(DbError::SchemaVersion {

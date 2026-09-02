@@ -1,4 +1,11 @@
-import type { CellRow, EditResult, LayerId } from '@cellstudio/api-client'
+import type {
+  CellRow,
+  EditResult,
+  LabelDefinition,
+  LabelDefinitionInput,
+  LayerId,
+  SetLabelsBody,
+} from '@cellstudio/api-client'
 import type { GraphApi, MaskApi, PixelApi } from '../data/api'
 import { GpuBudget } from '../data/gpuBudget'
 import type { PlaneKey, VolumeKey } from '../data/keys'
@@ -37,6 +44,8 @@ export interface NavActions {
   setLabelsVersion?(version: number): void
   /** Patches the graph echo after a graph edit commits. */
   setGraphVersion?(version: number): void
+  /** The definition list after a PUT or DELETE. */
+  setLabelDefinitions?(definitions: LabelDefinition[]): void
 }
 
 /** What a graph commit reported changed; empty means "refetch everything". */
@@ -132,7 +141,7 @@ export class ViewerSession {
     })
     this.tracks = new TrackSource(opts.api)
     this.remaps = new RemapCache()
-    this.readout = new CursorReadout({ api: opts.api, tracks: this.tracks })
+    this.readout = new CursorReadout()
     const nav = opts.nav ?? {
       select: (cellId: number | null) => useNav.getState().select(cellId),
       jumpToCell: (cell: CellRow, view?: ActiveView) => useNav.getState().jumpToCell(cell, view),
@@ -359,6 +368,39 @@ export class ViewerSession {
     void cut
       .call(this.graphApi, { parentId, childId })
       .then((result) => this.dispatchEdit(result))
+      .catch((error) => this.onEditError?.(rejectionReason(error)))
+  }
+
+  /** One label edit on the selected cell or its chain; the result patches rows like any
+   * graph edit. */
+  setLabels(body: SetLabelsBody): void {
+    const setLabels = this.graphApi.setLabels
+    if (!setLabels) return
+    void setLabels
+      .call(this.graphApi, body)
+      .then((result) => this.dispatchEdit(result))
+      .catch((error) => this.onEditError?.(rejectionReason(error)))
+  }
+
+  putLabelDefinitions(definitions: LabelDefinitionInput[]): void {
+    const put = this.graphApi.putLabelDefinitions
+    if (!put) return
+    void put
+      .call(this.graphApi, definitions)
+      .then((result) => this.navActions.setLabelDefinitions?.(result.definitions))
+      .catch((error) => this.onEditError?.(rejectionReason(error)))
+  }
+
+  /** Strip-then-remove: the strip is a journaled edit, the list update follows it. */
+  deleteLabelDefinition(name: string): void {
+    const remove = this.graphApi.deleteLabelDefinition
+    if (!remove) return
+    void remove
+      .call(this.graphApi, name)
+      .then((result) => {
+        if (result.edit) this.dispatchEdit(result.edit)
+        this.navActions.setLabelDefinitions?.(result.definitions)
+      })
       .catch((error) => this.onEditError?.(rejectionReason(error)))
   }
 

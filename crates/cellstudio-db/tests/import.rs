@@ -53,7 +53,10 @@ fn the_valid_fixture_stages_validates_and_materializes() {
     let offenders = project.db.validate_staged(false).expect("validate");
     assert_eq!(offenders, vec![], "the fixture is valid");
 
-    let summary = project.db.materialize_staged().expect("materialize");
+    let summary = project
+        .db
+        .materialize_staged(&[], &Default::default())
+        .expect("materialize");
     assert_eq!(
         (
             summary.cells,
@@ -129,7 +132,10 @@ fn materialization_updates_inventory_created_cell_rows_in_place() {
         })
     });
     project.db.stage_records(one_cell, &|_| {}).expect("stage");
-    project.db.materialize_staged().expect("materialize");
+    project
+        .db
+        .materialize_staged(&[], &Default::default())
+        .expect("materialize");
 
     let cells = project.db.cells_window(0, 0, None).expect("cells");
     assert_eq!(cells.len(), 1, "updated in place, not duplicated");
@@ -202,7 +208,10 @@ fn a_parse_failure_after_many_records_clears_staging_and_publishes_nothing() {
     // the aborted stream left nothing behind for the next import to inherit
     stage(&project, &data("tracking_valid", "tracks.json")).expect("stage");
     assert_eq!(project.db.validate_staged(false).expect("validate"), vec![]);
-    let summary = project.db.materialize_staged().expect("materialize");
+    let summary = project
+        .db
+        .materialize_staged(&[], &Default::default())
+        .expect("materialize");
     assert_eq!(summary.cells, 24);
 }
 
@@ -273,7 +282,10 @@ fn the_v1_policy_refuses_a_non_empty_graph_or_graph_history() {
 
     stage(&project, &data("tracking_valid", "tracks.json")).expect("stage");
     assert_eq!(project.db.validate_staged(false).expect("validate"), vec![]);
-    project.db.materialize_staged().expect("materialize");
+    project
+        .db
+        .materialize_staged(&[], &Default::default())
+        .expect("materialize");
     let blocked = project
         .db
         .import_blocker()
@@ -316,7 +328,10 @@ fn f00_import_end_to_end() {
     let offenders = project.db.validate_staged(false).expect("validate");
     assert_eq!(offenders, vec![]);
     let validated_at = start.elapsed();
-    let summary = project.db.materialize_staged().expect("materialize");
+    let summary = project
+        .db
+        .materialize_staged(&[], &Default::default())
+        .expect("materialize");
     let done = start.elapsed();
 
     println!(

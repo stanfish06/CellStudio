@@ -66,6 +66,9 @@ pub struct CellRecord {
     pub state: Option<CellState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// Track-scope labels; per cell in the file, like `labels`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub track_labels: Vec<String>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub features: serde_json::Map<String, serde_json::Value>,
 }
@@ -88,6 +91,12 @@ pub struct TrackingMetadata {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shape_tczyx: Option<[u64; 5]>,
+    /// The project's full label vocabulary, including names no cell carries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub label_definitions: Vec<String>,
+    /// `name → #rrggbb` for every definition that has a colour.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub label_colors: std::collections::BTreeMap<String, String>,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }

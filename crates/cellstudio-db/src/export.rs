@@ -72,9 +72,20 @@ impl Db {
             out,
             "{{\"format\":\"{TRACKING_FORMAT}\",\"version\":{TRACKING_VERSION},\"metadata\":"
         )?;
+        let all = crate::project::label_definitions_in(&tx)?;
+        let colors: serde_json::Map<String, serde_json::Value> = all
+            .iter()
+            .filter_map(|d| d.color.clone().map(|c| (d.name.clone(), json!(c))))
+            .collect();
+        let definitions: Vec<String> = all.into_iter().map(|d| d.name).collect();
         serde_json::to_writer(
             &mut *out,
-            &json!({ "created": created, "app_version": app_version }),
+            &json!({
+                "created": created,
+                "app_version": app_version,
+                "label_definitions": definitions,
+                "label_colors": colors,
+            }),
         )?;
         out.write_all(b",\"cells\":[")?;
 
@@ -87,7 +98,7 @@ impl Db {
             let mut cells = tx.prepare(
                 "SELECT id, t, z, y, x, area, detection_confidence, state, track_id,
                         src_id, seg_id, labels, features, reviewed,
-                        (SELECT parent FROM links WHERE child = cells.id LIMIT 1)
+                        (SELECT parent FROM links WHERE child = cells.id LIMIT 1), track_labels
                    FROM cells ORDER BY t, id",
             )?;
             let mut children =
@@ -138,6 +149,7 @@ fn record_of(
         confidence: row.detection_confidence,
         state: row.state,
         labels: row.labels,
+        track_labels: row.track_labels,
         features: row.features,
     })
 }

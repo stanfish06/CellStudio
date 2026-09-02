@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use cellstudio_core::axes::PhysicalScale;
+use std::collections::BTreeMap;
+
 use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -232,6 +234,38 @@ impl Db {
         self.put_meta_json(VOXEL_OVERRIDE_KEY, &serde_json::to_value(scale)?)
     }
 
+    /// Stored definitions ∪ names present on any cell, sorted, with use counts.
+    pub fn label_definitions(&self) -> Result<Vec<LabelDefinition>, DbError> {
+        let conn = self.conn()?;
+        label_definitions_in(&conn)
+    }
+
+    /// Replaces the stored definition list. Names still on cells stay visible through the
+    /// union regardless.
+    pub fn put_label_definitions(&self, entries: &[StoredLabel]) -> Result<u64, DbError> {
+        let mut clean: Vec<StoredLabel> = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let name = validate_label_name(&entry.name)?;
+            if clean.iter().any(|d| d.name == name) {
+                return Err(DbError::InvalidLabelName(format!(
+                    "{name:?} is listed twice"
+                )));
+            }
+            let color = entry
+                .color
+                .as_deref()
+                .map(validate_label_color)
+                .transpose()?;
+            clean.push(StoredLabel { name, color });
+        }
+        let mut guard = self.conn()?;
+        let tx = guard.transaction()?;
+        write_definitions_in(&tx, &mut clean)?;
+        let version = crate::queries::bump_in(&tx, VersionCounter::Settings)?;
+        tx.commit()?;
+        Ok(version)
+    }
+
     fn meta_json(&self, key: &str) -> Result<Option<Value>, DbError> {
         let conn = self.conn()?;
         let raw: Option<String> = conn
@@ -262,6 +296,129 @@ impl Db {
     pub(crate) fn conn(&self) -> Result<MutexGuard<'_, Connection>, DbError> {
         self.conn.lock().map_err(|_| DbError::Poisoned)
     }
+}
+
+/// `meta` key holding the stored label vocabulary as a JSON array of `{name, color}`
+/// objects (older projects stored bare strings; both parse).
+pub const LABEL_DEFINITIONS_KEY: &str = "labels.definitions";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelDefinition {
+    pub name: String,
+    /// Cells carrying the name in either scope.
+    pub uses: u64,
+    /// `#rrggbb`, or none for a name that has no colour yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// One stored entry: a name and its optional colour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredLabel {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// Trimmed and non-empty, or an error naming the offender.
+pub fn validate_label_name(name: &str) -> Result<String, DbError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(DbError::InvalidLabelName("a label needs a name".to_owned()));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Lower-case `#rrggbb`, or an error.
+pub fn validate_label_color(color: &str) -> Result<String, DbError> {
+    let trimmed = color.trim();
+    let hex = trimmed.strip_prefix('#').unwrap_or("");
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(DbError::InvalidLabelName(format!(
+            "colour {trimmed:?} is not #rrggbb"
+        )));
+    }
+    Ok(format!("#{}", hex.to_ascii_lowercase()))
+}
+
+fn stored_definitions_in(conn: &Connection) -> Result<Vec<StoredLabel>, DbError> {
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            [LABEL_DEFINITIONS_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(text) = raw.as_deref().filter(|t| !t.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let entries: Vec<Value> = serde_json::from_str(text)?;
+    entries
+        .into_iter()
+        .map(|entry| match entry {
+            Value::String(name) => Ok(StoredLabel { name, color: None }),
+            other => Ok(serde_json::from_value(other)?),
+        })
+        .collect()
+}
+
+fn write_definitions_in(conn: &Connection, stored: &mut Vec<StoredLabel>) -> Result<(), DbError> {
+    stored.sort_by(|a, b| a.name.cmp(&b.name));
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![LABEL_DEFINITIONS_KEY, serde_json::to_string(stored)?],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn label_definitions_in(conn: &Connection) -> Result<Vec<LabelDefinition>, DbError> {
+    let mut uses: BTreeMap<String, (u64, Option<String>)> = stored_definitions_in(conn)?
+        .into_iter()
+        .map(|d| (d.name, (0, d.color)))
+        .collect();
+    let mut stmt = conn.prepare(
+        "SELECT labels, track_labels FROM cells WHERE labels IS NOT NULL OR track_labels IS NOT NULL",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let mut names = crate::queries::parse_labels(row.get(0)?)?;
+        names.extend(crate::queries::parse_labels(row.get(1)?)?);
+        names.sort();
+        names.dedup();
+        for name in names {
+            uses.entry(name).or_insert((0, None)).0 += 1;
+        }
+    }
+    Ok(uses
+        .into_iter()
+        .map(|(name, (uses, color))| LabelDefinition { name, uses, color })
+        .collect())
+}
+
+/// Adds `names` to the stored list (keeping every existing colour) and applies `colors`
+/// to names that have none yet, without touching the settings version; import's own
+/// transaction bumps the graph version.
+pub(crate) fn merge_label_definitions_in(
+    conn: &Connection,
+    names: &[String],
+    colors: &BTreeMap<String, String>,
+) -> Result<(), DbError> {
+    let mut stored = stored_definitions_in(conn)?;
+    for name in names.iter().chain(colors.keys()) {
+        let name = validate_label_name(name)?;
+        if !stored.iter().any(|d| d.name == name) {
+            stored.push(StoredLabel { name, color: None });
+        }
+    }
+    for entry in &mut stored {
+        if entry.color.is_none()
+            && let Some(color) = colors.get(&entry.name)
+        {
+            entry.color = Some(validate_label_color(color)?);
+        }
+    }
+    write_definitions_in(conn, &mut stored)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -317,6 +474,8 @@ pub enum DbError {
     UnknownState(String),
     #[error("stored edit domain {0:?} is not a known domain")]
     UnknownDomain(String),
+    #[error("invalid label name: {0}")]
+    InvalidLabelName(String),
     #[error(
         "label {label} is the cell on frame {existing}; a mask edit at t={requested} would \
          move the cell and orphan its voxels — one id, one frame"

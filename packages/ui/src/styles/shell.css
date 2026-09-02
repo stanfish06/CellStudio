@@ -209,13 +209,16 @@
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(520px, 1fr) 300px;
+  /* one explicit row clamped to the workspace: an implicit auto row would grow with the
+     inspector's content and push the view panel's transport bar below the window */
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .statusbar {
   border-top: 1px solid var(--line);
   background: #25272a;
   display: grid;
-  grid-template-columns: 1fr auto auto auto auto;
+  grid-template-columns: 1fr auto;
   gap: 14px;
   padding: 0 8px;
   color: #c7c7c7;
@@ -238,8 +241,7 @@
 }
 
 .job-status,
-.write-status,
-.backend-status {
+.write-status {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -251,8 +253,7 @@
 }
 
 .job-status .dot,
-.write-status .dot,
-.backend-status .dot {
+.write-status .dot {
   width: 6px;
   height: 6px;
   box-shadow: none;
@@ -319,4 +320,81 @@
   .ribbon-field {
     width: 104px;
   }
+}
+
+/* Assign labels: anchored under its button, above the view. */
+.label-popover {
+  position: absolute;
+  z-index: 10;
+  top: 40px;
+  left: 9px;
+  width: 232px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #35373b;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  padding: 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.label-scope {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.label-scope-option {
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #414348;
+  color: #dedede;
+  font-size: 11px;
+}
+
+.label-scope-option.active {
+  background: var(--focus-bg);
+  border-color: #65acd7;
+  color: #fff;
+}
+
+.label-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.label-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  gap: 7px;
+  align-items: center;
+  padding: 3px 2px;
+  border-radius: 2px;
+}
+
+.label-row:hover {
+  background: #414348;
+}
+
+.label-row input {
+  accent-color: var(--focus);
+  margin: 0;
+}
+
+.label-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.label-row-partial {
+  font: 8px var(--mono);
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }

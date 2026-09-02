@@ -5,6 +5,7 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use cellstudio_db::LabelScope;
 use cellstudio_db::queries::Bbox;
 use serde::Deserialize;
 
@@ -14,7 +15,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::routes::mask;
 use crate::routes::project::session_json;
 use crate::state::AppState;
-use crate::wire::{CellRowWire, EditEntryWire, LineageTreeWire};
+use crate::wire::{CellRowWire, EditEntryWire, LabelStateWire, LineageTreeWire};
 
 const DEFAULT_EDIT_LIMIT: u32 = 100;
 
@@ -82,6 +83,63 @@ pub struct LinkBody {
 #[serde(rename_all = "camelCase")]
 pub struct UnlinkBody {
     cell_id: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetLabelsBody {
+    cell_id: u32,
+    scope: LabelScope,
+    #[serde(default)]
+    add: Vec<String>,
+    #[serde(default)]
+    remove: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LabelStatesQuery {
+    cell: u32,
+}
+
+/// Per-definition state for the popover: on the cell, and how much of its chain.
+pub async fn label_states(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<LabelStatesQuery>,
+) -> ApiResult<Response> {
+    let active = state.require()?;
+    let states = active
+        .project
+        .db
+        .label_states(query.cell)
+        .map_err(|e| crate::error::ApiError::from(crate::edit::EditError::Graph(e)))?;
+    let wire: Vec<LabelStateWire> = states.iter().map(LabelStateWire::from).collect();
+    Ok(session_json(&active.session_id, wire))
+}
+
+/// One label edit, journaled beside link/unlink/cut.
+pub async fn set_labels(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<Json<SetLabelsBody>, JsonRejection>,
+) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    let body = json_body(body)?;
+    if body.add.is_empty() && body.remove.is_empty() {
+        return Err(ApiError::BadRequest(
+            "a label edit names at least one label to add or remove".to_owned(),
+        ));
+    }
+    mask::run(
+        &state,
+        active,
+        EditCommand::Graph(GraphCommand::SetLabels {
+            cell_id: body.cell_id,
+            scope: body.scope,
+            add: body.add,
+            remove: body.remove,
+        }),
+    )
+    .await
 }
 
 /// Session-fenced like every mask mutation; the coordinator commits validation, the link,

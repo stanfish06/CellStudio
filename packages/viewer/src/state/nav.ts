@@ -1,10 +1,16 @@
 import { create } from 'zustand'
-import type { CellRow, ChannelMeta, ProjectInfo } from '@cellstudio/api-client'
+import type {
+  CellRow,
+  ChannelMeta,
+  LabelDefinition,
+  LabelScope,
+  ProjectInfo,
+} from '@cellstudio/api-client'
 import type { PixelZYX } from '../data/world'
 
 export type ActiveView = 'xy' | 'xz' | 'yz' | '3d'
 export type SliceOrientation = 'xy' | 'xz' | 'yz'
-export type Tool = 'pointer' | 'pan' | 'brush' | 'eraser' | 'fill' | 'pick' | 'link'
+export type Tool = 'pointer' | 'pan' | 'brush' | 'eraser' | 'link'
 
 /** The armed half of a Link: parent captured with the session and graph version it was
  * armed under, validated again at completion. */
@@ -54,6 +60,8 @@ export const BRUSH_RADIUS_MAX = 200
 
 export interface OverlayState {
   labels: { on: boolean; opacity: number }
+  /** Label names whose current-frame cells get a boundary outline in the label's colour. */
+  highlightLabels: string[]
   /**
    * `trail` is the backward window length in frames, `fade` the linear opacity decay,
    * `dotSize` the centroid radius in image pixels — it scales with the image, so a dot
@@ -95,9 +103,13 @@ export interface NavState {
   /** The selected trail edge, for cutting one link instead of a whole track. */
   selectedLink: { parent: number; child: number } | null
   pendingLink: PendingLink | null
+  /** Which array the assign-labels popover writes; UI state, not part of the scene snapshot. */
+  labelScope: LabelScope
   generation: number
 
   initProject(project: ProjectInfo): void
+  setLabelScope(scope: LabelScope): void
+  setLabelDefinitions(definitions: LabelDefinition[]): void
   stepT(delta: number): void
   setT(t: number): void
   stepSlice(delta: number): void
@@ -158,6 +170,7 @@ export const useNav = create<NavState>((set, get) => ({
   activeChannel: 0,
   overlays: {
     labels: { on: true, opacity: 0.36 },
+    highlightLabels: [],
     tracks: {
       on: true,
       opacity: 0.85,
@@ -173,7 +186,18 @@ export const useNav = create<NavState>((set, get) => ({
   selection: null,
   selectedLink: null,
   pendingLink: null,
+  labelScope: 'cell',
   generation: 0,
+
+  setLabelScope(scope) {
+    set({ labelScope: scope })
+  },
+
+  setLabelDefinitions(definitions) {
+    const { project } = get()
+    if (!project) return
+    set({ project: { ...project, labelDefinitions: definitions } })
+  },
 
   initProject(project) {
     const { dims, channels, dtype } = project
@@ -193,6 +217,7 @@ export const useNav = create<NavState>((set, get) => ({
       selectedLink: null,
       tool: 'pointer',
       pendingLink: null,
+      labelScope: 'cell',
       generation: get().generation + 1,
     })
   },

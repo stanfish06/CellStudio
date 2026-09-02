@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  ASSIGN_LABELS_KEY,
   LARGE_STEP,
   RESET_VIEW_KEY,
   SHORTCUTS,
@@ -47,7 +48,6 @@ describe('resolveKey', () => {
     expect(isToolEnabled('brush')).toBe(true)
     expect(isToolEnabled('eraser')).toBe(true)
     expect(isToolEnabled('link')).toBe(true)
-    expect(isToolEnabled('fill')).toBe(false)
     expect(isToolEnabled('pointer')).toBe(true)
     expect(isPaintTool('brush')).toBe(true)
     expect(isPaintTool('eraser')).toBe(true)
@@ -193,5 +193,19 @@ describe('SHORTCUTS', () => {
     expect(resolveKey({ key: 'Backspace' })).toEqual({ kind: 'deleteMask' })
     expect(resolveKey({ key: 'z', ctrlKey: true })).toEqual({ kind: 'undo' })
     expect(resolveKey({ key: 'z', metaKey: true, shiftKey: true })).toEqual({ kind: 'redo' })
+  })
+})
+
+describe('assign labels', () => {
+  it('binds A in either case, rejects it under a modifier, and lists it', () => {
+    expect(ASSIGN_LABELS_KEY).toBe('A')
+    expect(resolveKey({ key: 'a' })).toEqual({ kind: 'assignLabels' })
+    expect(resolveKey({ key: 'A' })).toEqual({ kind: 'assignLabels' })
+    expect(resolveKey({ key: 'a', metaKey: true })).toBeNull()
+    expect(resolveKey({ key: 'a', ctrlKey: true })).toBeNull()
+    expect(SHORTCUTS.some((row) => row.keys === ASSIGN_LABELS_KEY)).toBe(true)
+    expect(resolveKey({ key: 'u' })).toEqual({ kind: 'unassignLabels' })
+    expect(resolveKey({ key: 'g' })).toBeNull()
+    expect(resolveKey({ key: 'i' })).toBeNull()
   })
 })

@@ -73,6 +73,7 @@ impl ApiError {
             },
             ApiError::Db(e) => match e {
                 DbError::UnknownCell(_) => StatusCode::NOT_FOUND,
+                DbError::InvalidLabelName(_) => StatusCode::BAD_REQUEST,
                 DbError::AlreadyOpen(_)
                 | DbError::LabelFrameConflict { .. }
                 | DbError::LabelIdTaken(_)

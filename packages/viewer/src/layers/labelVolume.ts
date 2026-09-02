@@ -100,6 +100,7 @@ export interface LabelVolumeArgs {
   opacity: number
   /** Selected cell id, or 0. */
   selectedLabel?: number
+  highlightColors?: readonly (readonly [number, number, number])[]
   flipY?: boolean
 }
 
@@ -115,6 +116,7 @@ export interface LabelVolumeProps {
   pickable: false
   selectedLabel: number
   labelOpacity: number
+  highlightColors: readonly (readonly [number, number, number])[]
 }
 
 /** Props for the label volume drawn beside the image volume, at the same planned level. */
@@ -138,6 +140,7 @@ export function labelVolumeProps(args: LabelVolumeArgs): LabelVolumeProps {
     pickable: false,
     selectedLabel: clampLabelId(args.selectedLabel ?? 0),
     labelOpacity: clampOpacity(args.opacity),
+    highlightColors: args.highlightColors ?? [],
   }
 }
 

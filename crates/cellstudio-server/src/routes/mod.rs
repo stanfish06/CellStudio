@@ -7,7 +7,7 @@ pub mod store;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Router, middleware};
 
 use crate::auth;
@@ -36,6 +36,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/graph/link", post(graph::link))
         .route("/graph/unlink", post(graph::unlink))
         .route("/graph/cut", post(graph::cut))
+        .route(
+            "/graph/labels",
+            get(graph::label_states).post(graph::set_labels),
+        )
+        .route(
+            "/project/label-definitions",
+            get(project::get_label_definitions).put(project::put_label_definitions),
+        )
+        .route(
+            "/project/label-definitions/{name}",
+            delete(project::delete_label_definition),
+        )
         .route("/mask/reserve", post(mask::reserve))
         .route("/mask/stroke", post(mask::stroke))
         .route("/mask/delete", post(mask::delete))

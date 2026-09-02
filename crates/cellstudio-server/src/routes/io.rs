@@ -163,6 +163,8 @@ fn run_tracks_import(
         Err(e) => return handle.fail(e.to_string()),
     };
     let probe = stream.progress_probe();
+    let definitions = stream.header.metadata.label_definitions.clone();
+    let colors = stream.header.metadata.label_colors.clone();
     let progress = handle.clone();
     let staged = project.db.stage_records(stream.records, &move |_| {
         progress.progress(probe.fraction() * IMPORT_STAGE_SHARE)
@@ -193,7 +195,7 @@ fn run_tracks_import(
             "session was replaced before the import was published".to_owned(),
         ));
     }
-    let summary = match project.db.materialize_staged() {
+    let summary = match project.db.materialize_staged(&definitions, &colors) {
         Ok(summary) => summary,
         Err(e) => return handle.fail(abort(e.to_string())),
     };

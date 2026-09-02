@@ -4,6 +4,7 @@ import { ViewerSession } from './session'
 import { GpuBudget } from '../data/gpuBudget'
 import type { NavSnapshot } from './types'
 import type { OrbitCamera } from '../state/nav'
+import type { LabelDefinition } from '@cellstudio/api-client'
 import { FakeApi, cell, devProject, navSnapshot } from '../test/data'
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
@@ -208,17 +209,16 @@ describe('ViewerSession', () => {
     s.dispose()
   })
 
-  it('resolves the cursor readout against its own track window', async () => {
+  it('surfaces cursor moves through its change emitter', async () => {
     const api = new FakeApi()
-    api.pixelValue = 300
-    api.labelValue = 42
-    api.cells = [cell(42, 0, [1, 10, 10], 9)]
     const s = session(api)
     s.update(navSnapshot(project, { activeView: 'xy' }))
     await settle()
-    s.readout.move([1, 10, 10], { t: 0, channel: 0, labels: true })
-    await settle()
-    expect(s.readout.sample).toMatchObject({ value: 300, labelId: 42, trackId: 9 })
+    let changes = 0
+    s.onChange(() => (changes += 1))
+    s.readout.move([1, 10, 10])
+    expect(s.readout.sample).toEqual({ z: 1, y: 10, x: 10 })
+    expect(changes).toBe(1)
     s.dispose()
   })
 })
@@ -246,7 +246,7 @@ describe('ViewerSession lifecycle', () => {
     const s = session(api)
     s.update(navSnapshot(first, { activeView: 'xz' }))
     await settle()
-    s.readout.move([1, 10, 10], { t: 0, channel: 0 })
+    s.readout.move([1, 10, 10])
     await settle()
     expect(s.planes.stats.entries).toBeGreaterThan(0)
     expect(s.slices.xz.plane).not.toBe(null)
@@ -561,7 +561,10 @@ describe('ViewerSession link flow.', () => {
   const project = devProject({ hasLabels: true, hasGraph: true })
   const armed = { parentId: 77, sessionId: 'session-1', graphVersion: 1 }
 
-  const linkSession = (api: FakeApi) => {
+  const linkSession = (
+    api: FakeApi,
+    extra: { setLabelDefinitions?: (d: LabelDefinition[]) => void } = {},
+  ) => {
     const errors: string[] = []
     const completed: string[] = []
     const s = new ViewerSession({
@@ -575,6 +578,7 @@ describe('ViewerSession link flow.', () => {
         jumpToCell: () => {},
         completeLink: () => completed.push('complete'),
         cancelLink: () => completed.push('cancel'),
+        ...extra,
       },
       onEditError: (e) => errors.push(e instanceof Error ? e.message : String(e)),
     })
@@ -658,6 +662,46 @@ describe('ViewerSession link flow.', () => {
     expect(api.linkCalls).toEqual([])
     expect(completed).toEqual([])
     expect(errors).toEqual(['Link rejected: a cell cannot link to itself'])
+  })
+
+  it('posts a label edit and patches the selected row from the result', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    api.editedCells = [{ ...cell(77, 0, [1, 10, 20], 5), labels: ['verified'] }]
+    const { s, errors } = linkSession(api)
+    s.update(navSnapshot(project, { selection: { cellId: 77 } }))
+    await settle()
+    const advances: number[] = []
+    s.onGraphAdvance((v) => advances.push(v))
+
+    s.setLabels({ cellId: 77, scope: 'cell', add: ['verified'] })
+    api.cells = api.editedCells
+    await settle()
+    expect(api.setLabelsCalls).toEqual([{ cellId: 77, scope: 'cell', add: ['verified'] }])
+    expect(errors).toEqual([])
+    expect(s.tracks.cell(77)?.labels).toEqual(['verified'])
+    expect(advances).toEqual([2])
+  })
+
+  it('routes the strip edit of a definition delete and forwards the new list', async () => {
+    const api = new FakeApi()
+    api.cells = [cell(77, 0, [1, 10, 20], 5)]
+    api.definitions = [
+      { name: 'verified', uses: 1 },
+      { name: 'other', uses: 0 },
+    ]
+    api.deleteStrips = true
+    api.editedCells = [cell(77, 0, [1, 10, 20], 5)]
+    const lists: string[][] = []
+    const { s } = linkSession(api, { setLabelDefinitions: (d) => lists.push(d.map((x) => x.name)) })
+    s.update(navSnapshot(project, { selection: { cellId: 77 } }))
+    await settle()
+
+    s.deleteLabelDefinition('verified')
+    await settle()
+    expect(api.deleteDefinitionCalls).toEqual(['verified'])
+    expect(s.tracks.graphVersion).toBe(2)
+    expect(lists).toEqual([['other']])
   })
 
   it('posts unlink for the selected cell and routes the result to advanceGraph', async () => {

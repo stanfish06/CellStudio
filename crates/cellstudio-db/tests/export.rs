@@ -24,13 +24,18 @@ fn project(dir: &tempfile::TempDir, name: &str) -> Project {
 
 fn import(project: &Project, path: &Path) {
     let stream = open_tracking(path).expect("fixture header");
+    let definitions = stream.header.metadata.label_definitions.clone();
+    let colors = stream.header.metadata.label_colors.clone();
     project
         .db
         .stage_records(stream.records, &|_| {})
         .expect("stage");
     let offenders = project.db.validate_staged(false).expect("validate");
     assert_eq!(offenders, vec![], "the input graph is valid");
-    project.db.materialize_staged().expect("materialize");
+    project
+        .db
+        .materialize_staged(&definitions, &colors)
+        .expect("materialize");
 }
 
 fn export(project: &Project) -> (cellstudio_db::export::ExportSummary, Vec<u8>) {
@@ -107,6 +112,17 @@ fn a_round_trip_through_the_importer_is_identity() {
     assert_eq!(head.confidence, Some(0.901));
     assert_eq!(head.state.map(|s| s.as_str()), Some("normal"));
     assert_eq!(head.labels, vec!["ESI".to_owned(), "treated".to_owned()]);
+    assert_eq!(head.track_labels, vec!["cell type 1".to_owned()]);
+    let tagged: Vec<u32> = a_records
+        .iter()
+        .filter(|r| !r.track_labels.is_empty())
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(
+        tagged,
+        vec![1, 7],
+        "track-scope tags stay on the pre-division chain"
+    );
     assert_eq!(
         head.features
             .get("area")
@@ -147,6 +163,11 @@ fn metadata_carries_created_and_the_app_version() {
             .get("app_version")
             .and_then(serde_json::Value::as_str),
         Some(APP_VERSION)
+    );
+    assert_eq!(
+        stream.header.metadata.label_definitions,
+        vec!["ESI", "cell type 1", "control", "treated", "unused"],
+        "the vocabulary round-trips, including the unused name"
     );
 }
 

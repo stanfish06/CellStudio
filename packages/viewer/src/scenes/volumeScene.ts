@@ -11,7 +11,7 @@ import type { CellRow, Level, VolumeBuffer } from '@cellstudio/api-client'
 import { GpuBudget, gpuBudget as defaultBudget } from '../data/gpuBudget'
 import { volumeKeyId, type VolumeKey } from '../data/keys'
 import { LatestWins } from '../data/prefetch'
-import type { RemapCache } from '../data/trackFrame'
+import { withHighlightSlots, type RemapCache } from '../data/trackFrame'
 import type { TrackSource } from '../data/trackSource'
 import type { LabelVolumeView, MaskEditor } from '../edit/maskEditor'
 import {
@@ -25,13 +25,20 @@ import {
   type WorldXYZ,
 } from '../data/world'
 import type { VolumeCache } from '../data/volumeCache'
+import { HIGHLIGHT_BASE, HIGHLIGHT_SLOTS, HIGHLIGHT_STRIDE } from '../layers/labelPalette'
 import { LabelVolumeLayer, labelVolumeExtension, labelVolumeProps } from '../layers/labelVolume'
 import {
-  TrackLayer3D,
+  type LabelHighlight,
   type LineageOverlay,
+  type Rgb,
+  TrackLayer3D,
   type TrackPoint,
   type TrackSegment,
+  highlightSlots,
+  labeledCells,
 } from '../layers/tracks'
+import { labelHex } from '../layers/labelOutline'
+import { hexToRgb } from '../layers/orthoPlane'
 import { lineageHighlight } from './sliceScene'
 import {
   gamma3DExtension,
@@ -106,7 +113,7 @@ export interface VolumeSceneOptions {
   onSelect?: (cell: CellRow) => void
   onJumpToCell?: (cell: CellRow) => void
   /**A click while the link tool is armed, resolved to the target cell id*/
-onLinkTarget?: (cellId: number) => void
+  onLinkTarget?: (cellId: number) => void
   /** A click on a trail segment: the edge it names, for cutting one link. */
   onSelectLink?: (link: { parent: number; child: number }) => void
 }
@@ -189,7 +196,7 @@ export class VolumeScene {
   }
 
   /**The selected lineage, replacing the one-element highlight stub*/
-setLineage(overlay: LineageOverlay | null): void {
+  setLineage(overlay: LineageOverlay | null): void {
     if (this.lineage === overlay) return
     this.lineage = overlay
     this.changed.emit()
@@ -447,6 +454,7 @@ setLineage(overlay: LineageOverlay | null): void {
           cells,
           // overlays follow the pixels: the committed volume's frame, not nav's
           t: this.committed?.t ?? nav.t,
+          highlighted: labeledCells(cells, this.committed?.t ?? nav.t, this.labelHighlights(nav)),
           trail: nav.overlays.tracks.trail,
           dotSize: nav.overlays.tracks.dotSize,
           selectedLink: nav.selectedLink,
@@ -547,7 +555,11 @@ setLineage(overlay: LineageOverlay | null): void {
       ? this.editor.volumeBuffer(view, base?.buffer ?? null)
       : (base?.buffer ?? null)
     if (!volume) return null
-    const { volume: shown, selectedLabel } = this.displayVolume(nav, volume, base, view)
+    const {
+      volume: shown,
+      selectedLabel,
+      highlightColors,
+    } = this.displayVolume(nav, volume, base, view)
     return vivLayer(LabelVolumeLayer, {
       ...labelVolumeProps({
         id: `${this.id}-labels`,
@@ -556,18 +568,24 @@ setLineage(overlay: LineageOverlay | null): void {
         t: view.t,
         opacity: nav.overlays.labels.opacity,
         selectedLabel,
+        highlightColors,
       }),
       extensions: [labelVolumeExtension()],
     })
   }
 
-  /** The display remap of D4, mirroring `SliceScene.displayPlane` for the label volume. */
+  /**
+   * The display remap of D4, mirroring `SliceScene.displayPlane` for the label volume. Cells
+   * carrying a highlighted label are redirected to highlight slots here, so the volume paints
+   * them solid in the label's colour: a 3D boundary has no silhouette to trace, a filled cell
+   * reads at any angle.
+   */
   private displayVolume(
     nav: NavSnapshot,
     volume: VolumeBuffer,
     base: { buffer: VolumeBuffer; version: number } | null,
     view: LabelVolumeView,
-  ): { volume: VolumeBuffer; selectedLabel: number } {
+  ): { volume: VolumeBuffer; selectedLabel: number; highlightColors: Rgb[] } {
     const selected = nav.selection?.cellId ?? 0
     const frame = this.tracksSource?.frame()
     const remap =
@@ -575,14 +593,34 @@ setLineage(overlay: LineageOverlay | null): void {
       frame !== undefined &&
       frame.ready &&
       (this.tracksSource?.cells.length ?? 0) > 0
-    if (!remap || !this.remaps || !frame) return { volume, selectedLabel: selected }
-    const bufferKey = base
+    if (!remap || !this.remaps || !frame) {
+      return { volume, selectedLabel: selected, highlightColors: [] }
+    }
+    const { slots, colors, signature } = highlightSlots(
+      this.tracksSource?.cells ?? [],
+      view.t,
+      this.labelHighlights(nav),
+      HIGHLIGHT_SLOTS,
+    )
+    const shownFrame = withHighlightSlots(frame, slots, HIGHLIGHT_BASE, HIGHLIGHT_STRIDE)
+    const baseKey = base
       ? volumeKeyId({ layer: 'labels', level: view.level, t: view.t, c: 0, version: base.version })
       : `${this.id}-echo`
+    const bufferKey = slots.size > 0 ? `${baseKey}|hl:${signature}` : baseKey
     return {
-      volume: this.remaps.volume(bufferKey, volume, frame, volume === base?.buffer),
-      selectedLabel: frame.trackIdFor(selected) ?? selected,
+      volume: this.remaps.volume(bufferKey, volume, shownFrame, volume === base?.buffer),
+      selectedLabel: shownFrame.trackIdFor(selected) ?? selected,
+      highlightColors: colors,
     }
+  }
+
+  /** The sheet's highlighted labels with their colours, in sheet order. */
+  private labelHighlights(nav: NavSnapshot): LabelHighlight[] {
+    const defs = nav.project?.labelDefinitions ?? []
+    return nav.overlays.highlightLabels.map((name) => ({
+      name,
+      color: hexToRgb(labelHex(defs.find((d) => d.name === name) ?? { name })),
+    }))
   }
 
   /**

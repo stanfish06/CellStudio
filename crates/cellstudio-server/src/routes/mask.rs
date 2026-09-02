@@ -126,6 +126,17 @@ pub async fn run(
     command: EditCommand,
 ) -> ApiResult<Response> {
     let session = active.session_id.clone();
+    let result = commit(state, active, command).await?;
+    Ok(session_json(&session, result))
+}
+
+/// One edit through the coordinator on the blocking pool, as the wire result.
+pub async fn commit(
+    state: &Arc<AppState>,
+    active: Arc<ActiveProject>,
+    command: EditCommand,
+) -> ApiResult<EditResultWire> {
+    let session = active.session_id.clone();
     let outcome = state
         .io(move || {
             Ok(active
@@ -133,10 +144,7 @@ pub async fn run(
                 .execute(&active.image, &active.session_id, command)?)
         })
         .await?;
-    Ok(session_json(
-        &session,
-        EditResultWire::new(&session, outcome),
-    ))
+    Ok(EditResultWire::new(&session, outcome))
 }
 
 /// The open project, only when it is the one the request addresses. A mutation carrying no

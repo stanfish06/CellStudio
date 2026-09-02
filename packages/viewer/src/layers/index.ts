@@ -53,3 +53,5 @@ export type {
 export { vivLayer } from './viv'
 export { gamma3DExtension, packVolumeForViv, scaleTransform, volumeProps } from './volume'
 export type { RenderingMode, VolumeArgs, VolumeChannel, VolumeProps } from './volume'
+export { DEFAULT_LABEL_COLORS, defaultLabelColor, labelHex, outlineImage } from './labelOutline'
+export type { OutlineImage } from './labelOutline'

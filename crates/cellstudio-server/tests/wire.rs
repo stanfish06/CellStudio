@@ -55,6 +55,7 @@ fn project_info_matches_the_typescript_schema() {
             "dtype",
             "hasGraph",
             "hasLabels",
+            "labelDefinitions",
             "layout",
             "levels",
             "projectPath",

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::extract::rejection::JsonRejection;
+use axum::extract::{Path as AxumPath, State};
+use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, http::HeaderName};
@@ -10,19 +11,19 @@ use cellstudio_core::labels;
 use cellstudio_core::reader::ImageReader;
 use cellstudio_core::{LayerId, dataset::Dataset};
 use cellstudio_db::queries::VersionCounter;
-use cellstudio_db::{DbError, Project};
+use cellstudio_db::{DbError, Project, StoredLabel};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::auth::json_body;
-use crate::edit::ProjectEditCoordinator;
+use crate::edit::{EditCommand, GraphCommand, ProjectEditCoordinator};
 use crate::error::{ApiError, ApiResult};
 use crate::events::{Event, EventBus};
-use crate::routes::io;
+use crate::routes::{io, mask};
 use crate::state::{ActiveProject, AppState, assembled_layer, layout_of};
 use crate::wire::{
-    ChannelWire, HealthInfo, LayoutAdvisory, LevelWire, ProjectInfo, ReadStats, SESSION_HEADER,
-    VersionsWire,
+    ChannelWire, HealthInfo, LabelDefinitionWire, LabelDefinitionsWire, LayoutAdvisory, LevelWire,
+    ProjectInfo, ReadStats, SESSION_HEADER, VersionsWire,
 };
 
 #[derive(Debug, Deserialize)]
@@ -251,7 +252,106 @@ pub fn project_info(active: &ActiveProject) -> ApiResult<ProjectInfo> {
         layout: LayoutAdvisory::from(&active.layout),
         has_labels: active.project.has_labels(),
         has_graph: active.project.db.has_graph()?,
+        label_definitions: definitions_of(active)?,
     })
+}
+
+fn definitions_of(active: &ActiveProject) -> ApiResult<Vec<LabelDefinitionWire>> {
+    Ok(active
+        .project
+        .db
+        .label_definitions()?
+        .iter()
+        .map(LabelDefinitionWire::from)
+        .collect())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DefinitionsBody {
+    definitions: Vec<StoredLabel>,
+}
+
+pub async fn get_label_definitions(State(state): State<Arc<AppState>>) -> ApiResult<Response> {
+    let active = state.require()?;
+    Ok(session_json(
+        &active.session_id,
+        LabelDefinitionsWire {
+            session_id: active.session_id.clone(),
+            definitions: definitions_of(&active)?,
+            edit: None,
+        },
+    ))
+}
+
+/// Replaces the stored list; names still on cells stay listed through the union.
+pub async fn put_label_definitions(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<Json<DefinitionsBody>, JsonRejection>,
+) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    let body = json_body(body)?;
+    active.project.db.put_label_definitions(&body.definitions)?;
+    let versions = VersionsWire::new(&active.session_id, active.versions()?);
+    state.events.publish(Event::Versions { versions });
+    Ok(session_json(
+        &active.session_id,
+        LabelDefinitionsWire {
+            session_id: active.session_id.clone(),
+            definitions: definitions_of(&active)?,
+            edit: None,
+        },
+    ))
+}
+
+/// Strips the name from every cell as one journaled edit when any carries it, then drops
+/// it from the stored list. Ordered so a failure between the two leaves the name listed
+/// with zero uses rather than on cells the sheet cannot show.
+pub async fn delete_label_definition(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    AxumPath(name): AxumPath<String>,
+) -> ApiResult<Response> {
+    let active = mask::fenced(&state, &headers)?;
+    let in_use = active
+        .project
+        .db
+        .label_definitions()?
+        .iter()
+        .any(|d| d.name == name && d.uses > 0);
+    let edit = match in_use {
+        true => Some(
+            mask::commit(
+                &state,
+                active.clone(),
+                EditCommand::Graph(GraphCommand::StripLabel { name: name.clone() }),
+            )
+            .await?,
+        ),
+        false => None,
+    };
+    let remaining: Vec<StoredLabel> = active
+        .project
+        .db
+        .label_definitions()?
+        .into_iter()
+        .filter(|d| d.name != name)
+        .map(|d| StoredLabel {
+            name: d.name,
+            color: d.color,
+        })
+        .collect();
+    active.project.db.put_label_definitions(&remaining)?;
+    let versions = VersionsWire::new(&active.session_id, active.versions()?);
+    state.events.publish(Event::Versions { versions });
+    Ok(session_json(
+        &active.session_id,
+        LabelDefinitionsWire {
+            session_id: active.session_id.clone(),
+            definitions: definitions_of(&active)?,
+            edit,
+        },
+    ))
 }
 
 pub fn new_session_id() -> String {

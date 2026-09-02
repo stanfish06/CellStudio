@@ -9,10 +9,11 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::project::validate_label_name;
 use crate::project::{Db, DbError};
 use crate::queries::{
     CELL_BY_ID_SQL, CellRow, LinkRow, MAX_LABEL_ID, VersionCounter, bump_in, cell_row,
-    clear_redo_in, links_of, to_u32, to_u64,
+    clear_redo_in, labels_text, links_of, parse_labels, to_u32, to_u64,
 };
 
 /// `meta` counter the fresh track ids come from; seeded above the current maximum `track_id`.
@@ -51,7 +52,44 @@ pub enum GraphError {
     NoLinks(u32),
     #[error("there is no link {parent} → {child} to cut")]
     NoSuchLink { parent: u32, child: u32 },
+    #[error("labels unchanged on cell {0}: nothing to do")]
+    NoChange(u32),
 }
+
+/// Which per-cell array a label edit writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LabelScope {
+    Cell,
+    Track,
+}
+
+/// How much of a chain carries a track-scope name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackCoverage {
+    All,
+    None,
+    Some,
+}
+
+/// One definition's state relative to a selected cell and its chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelState {
+    pub name: String,
+    pub cell: bool,
+    pub track: TrackCoverage,
+}
+
+/// Both label arrays of one cell, sorted and deduplicated.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabelSets {
+    pub labels: Vec<String>,
+    pub track_labels: Vec<String>,
+}
+
+/// `(cell, sets)` per rewritten cell, one side of a label delta.
+pub type LabelSides = Vec<(u32, LabelSets)>;
 
 /// The full delta of one graph-changing edit. `track_ids_before`/`after` list every cell of
 /// every affected chain, so undo/redo restore exact assignments instead of re-materializing.
@@ -61,6 +99,12 @@ pub struct GraphDelta {
     pub removed_links: Vec<LinkRow>,
     pub track_ids_before: Vec<(u32, Option<u32>)>,
     pub track_ids_after: Vec<(u32, Option<u32>)>,
+    /// Exact label arrays of every cell a label edit rewrote; rows before this field
+    /// existed deserialize as empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels_before: Vec<(u32, LabelSets)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels_after: Vec<(u32, LabelSets)>,
 }
 
 impl GraphDelta {
@@ -69,6 +113,8 @@ impl GraphDelta {
             && self.removed_links.is_empty()
             && self.track_ids_before.is_empty()
             && self.track_ids_after.is_empty()
+            && self.labels_before.is_empty()
+            && self.labels_after.is_empty()
     }
 
     /// Every track id appearing on either side of the assignment delta, deduplicated.
@@ -84,13 +130,14 @@ impl GraphDelta {
         tracks
     }
 
-    /// Every cell whose assignment the delta touches.
+    /// Every cell whose assignment or labels the delta touches.
     pub fn affected_cells(&self) -> Vec<u32> {
         let mut cells: Vec<u32> = self
             .track_ids_before
             .iter()
             .chain(&self.track_ids_after)
             .map(|(cell, _)| *cell)
+            .chain(self.labels_before.iter().map(|(cell, _)| *cell))
             .collect();
         cells.sort_unstable();
         cells.dedup();
@@ -408,6 +455,90 @@ pub fn apply_assignments(
     Ok(())
 }
 
+fn label_sets_in(tx: &Transaction, id: u32) -> Result<Option<LabelSets>, DbError> {
+    tx.query_row(
+        "SELECT labels, track_labels FROM cells WHERE id = ?1",
+        [id],
+        |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(|(labels, track_labels)| {
+        Ok(LabelSets {
+            labels: parse_labels(labels)?,
+            track_labels: parse_labels(track_labels)?,
+        })
+    })
+    .transpose()
+}
+
+/// Writes one side of a journaled label delta.
+pub fn apply_label_sets(tx: &Transaction, sets: &[(u32, LabelSets)]) -> Result<(), DbError> {
+    let mut stmt =
+        tx.prepare_cached("UPDATE cells SET labels = ?2, track_labels = ?3 WHERE id = ?1")?;
+    for (cell, set) in sets {
+        stmt.execute(params![
+            cell,
+            labels_text(&set.labels),
+            labels_text(&set.track_labels)
+        ])?;
+    }
+    Ok(())
+}
+
+fn edited(current: &[String], add: &[String], remove: &[String]) -> Vec<String> {
+    let mut next: Vec<String> = current
+        .iter()
+        .chain(add)
+        .filter(|name| !remove.contains(name))
+        .cloned()
+        .collect();
+    next.sort();
+    next.dedup();
+    next
+}
+
+/// Applies `add`/`remove` to `scope`'s array on every target, recording exact before/after
+/// sets for the cells that actually change.
+fn set_labels_in(
+    tx: &Transaction,
+    targets: &[u32],
+    scope: LabelScope,
+    add: &[String],
+    remove: &[String],
+) -> Result<(LabelSides, LabelSides), DbError> {
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    for &id in targets {
+        let Some(current) = label_sets_in(tx, id)? else {
+            continue;
+        };
+        let mut next = current.clone();
+        match scope {
+            LabelScope::Cell => next.labels = edited(&current.labels, add, remove),
+            LabelScope::Track => next.track_labels = edited(&current.track_labels, add, remove),
+        }
+        if next != current {
+            before.push((id, current));
+            after.push((id, next));
+        }
+    }
+    apply_label_sets(tx, &after)?;
+    Ok((before, after))
+}
+
+fn signed(add: &[String], remove: &[String]) -> String {
+    add.iter()
+        .map(|n| format!("+{n}"))
+        .chain(remove.iter().map(|n| format!("−{n}")))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn journal_in(tx: &Transaction, op: &GraphOp) -> Result<i64, DbError> {
     const SQL: &str = "\
 INSERT INTO edits(ts, domain, op, inverse)
@@ -458,6 +589,7 @@ impl Db {
             removed_links: Vec::new(),
             track_ids_before: before,
             track_ids_after: after,
+            ..GraphDelta::default()
         };
         let op = GraphOp {
             kind: "link".to_owned(),
@@ -500,6 +632,7 @@ impl Db {
                 removed_links: removed,
                 track_ids_before: before,
                 track_ids_after: after,
+                ..GraphDelta::default()
             },
         };
         clear_redo_in(&tx)?;
@@ -543,6 +676,7 @@ impl Db {
                 removed_links: removed,
                 track_ids_before: before,
                 track_ids_after: after,
+                ..GraphDelta::default()
             },
         };
         clear_redo_in(&tx)?;
@@ -556,6 +690,167 @@ impl Db {
             cells,
             affected_tracks: op.delta.affected_tracks(),
         })
+    }
+
+    /// Every definition (stored ∪ in use) with its state on `cell` and over `cell`'s chain.
+    pub fn label_states(&self, cell: u32) -> Result<Vec<LabelState>, GraphError> {
+        let mut guard = self.conn()?;
+        let tx = guard.transaction().map_err(DbError::from)?;
+        let Some(own) = label_sets_in(&tx, cell)? else {
+            return Err(GraphError::UnknownCell(cell));
+        };
+        let chain = chain_of(&tx, cell)?;
+        let mut chain_sets = Vec::with_capacity(chain.len());
+        for id in &chain {
+            if let Some(sets) = label_sets_in(&tx, *id)? {
+                chain_sets.push(sets);
+            }
+        }
+        let states = crate::project::label_definitions_in(&tx)?
+            .into_iter()
+            .map(|def| {
+                let carrying = chain_sets
+                    .iter()
+                    .filter(|s| s.track_labels.contains(&def.name))
+                    .count();
+                LabelState {
+                    cell: own.labels.contains(&def.name),
+                    track: match carrying {
+                        0 => TrackCoverage::None,
+                        n if n == chain_sets.len() => TrackCoverage::All,
+                        _ => TrackCoverage::Some,
+                    },
+                    name: def.name,
+                }
+            })
+            .collect();
+        Ok(states)
+    }
+
+    /// Sets or clears labels on one cell (cell scope) or on every cell of its chain (track
+    /// scope) as one journaled graph edit. Identities do not move, so `affected_tracks` is
+    /// empty and the delta carries only label sets.
+    pub fn graph_set_labels(
+        &self,
+        cell: u32,
+        scope: LabelScope,
+        add: &[String],
+        remove: &[String],
+    ) -> Result<GraphCommit, GraphError> {
+        let add: Vec<String> = add
+            .iter()
+            .map(|n| validate_label_name(n))
+            .collect::<Result<_, _>>()?;
+        let remove: Vec<String> = remove
+            .iter()
+            .map(|n| validate_label_name(n))
+            .collect::<Result<_, _>>()?;
+        let mut guard = self.conn()?;
+        let tx = guard.transaction().map_err(DbError::from)?;
+        if cell_t_in(&tx, cell)?.is_none() {
+            return Err(GraphError::UnknownCell(cell));
+        }
+        let targets = match scope {
+            LabelScope::Cell => vec![cell],
+            LabelScope::Track => chain_of(&tx, cell)?,
+        };
+        let (before, after) = set_labels_in(&tx, &targets, scope, &add, &remove)?;
+        if before.is_empty() {
+            return Err(GraphError::NoChange(cell));
+        }
+        let target = match scope {
+            LabelScope::Cell => format!("cell {cell}"),
+            LabelScope::Track => match track_id_in(&tx, cell)? {
+                Some(track) => format!("track {track} ({} cells)", targets.len()),
+                None => format!("track of cell {cell} ({} cells)", targets.len()),
+            },
+        };
+        let op = GraphOp {
+            kind: "set_labels".to_owned(),
+            scope: format!("{} · {target}", signed(&add, &remove)),
+            delta: GraphDelta {
+                labels_before: before,
+                labels_after: after,
+                ..GraphDelta::default()
+            },
+        };
+        clear_redo_in(&tx)?;
+        let seq = journal_in(&tx, &op)?;
+        let graph_version = bump_in(&tx, VersionCounter::Graph)?;
+        let cells = rows_of(&tx, &op.delta.affected_cells())?;
+        tx.commit().map_err(DbError::from)?;
+        Ok(GraphCommit {
+            seq,
+            graph_version,
+            cells,
+            affected_tracks: Vec::new(),
+        })
+    }
+
+    /// Removes `name` from both arrays of every cell carrying it, as one journaled edit.
+    /// `None` when no cell carried it, so a definition-only removal journals nothing.
+    pub fn graph_strip_label(&self, name: &str) -> Result<Option<GraphCommit>, GraphError> {
+        let name = validate_label_name(name)?;
+        let mut guard = self.conn()?;
+        let tx = guard.transaction().map_err(DbError::from)?;
+        let carriers = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, labels, track_labels FROM cells
+                      WHERE labels IS NOT NULL OR track_labels IS NOT NULL",
+                )
+                .map_err(DbError::from)?;
+            let mut rows = stmt.query([]).map_err(DbError::from)?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next().map_err(DbError::from)? {
+                let labels = parse_labels(row.get(1).map_err(DbError::from)?)?;
+                let track_labels = parse_labels(row.get(2).map_err(DbError::from)?)?;
+                if labels.contains(&name) || track_labels.contains(&name) {
+                    ids.push(to_u32(row.get(0).map_err(DbError::from)?)?);
+                }
+            }
+            ids
+        };
+        if carriers.is_empty() {
+            return Ok(None);
+        }
+        let remove = [name.clone()];
+        let (mut before, _) = set_labels_in(&tx, &carriers, LabelScope::Cell, &[], &remove)?;
+        let (before_t, after) = set_labels_in(&tx, &carriers, LabelScope::Track, &[], &remove)?;
+        // a cell touched by both passes keeps its first (original) snapshot
+        for (id, sets) in before_t {
+            if !before.iter().any(|(seen, _)| *seen == id) {
+                before.push((id, sets));
+            }
+        }
+        // `after` is the final state: re-read every touched cell once
+        let mut after_all = Vec::new();
+        for (id, _) in &before {
+            if let Some(sets) = label_sets_in(&tx, *id)? {
+                after_all.push((*id, sets));
+            }
+        }
+        drop(after);
+        let op = GraphOp {
+            kind: "strip_label".to_owned(),
+            scope: format!("strip {name} ({} cells)", before.len()),
+            delta: GraphDelta {
+                labels_before: before,
+                labels_after: after_all,
+                ..GraphDelta::default()
+            },
+        };
+        clear_redo_in(&tx)?;
+        let seq = journal_in(&tx, &op)?;
+        let graph_version = bump_in(&tx, VersionCounter::Graph)?;
+        let cells = rows_of(&tx, &op.delta.affected_cells())?;
+        tx.commit().map_err(DbError::from)?;
+        Ok(Some(GraphCommit {
+            seq,
+            graph_version,
+            cells,
+            affected_tracks: Vec::new(),
+        }))
     }
 
     /// Undoes or redoes the graph journal row `seq` by applying its stored delta exactly:
@@ -581,6 +876,7 @@ impl Db {
                 insert_link(&tx, link)?;
             }
             apply_assignments(&tx, &delta.track_ids_before)?;
+            apply_label_sets(&tx, &delta.labels_before)?;
         } else {
             for link in &delta.removed_links {
                 delete_link(&tx, link)?;
@@ -589,6 +885,7 @@ impl Db {
                 insert_link(&tx, link)?;
             }
             apply_assignments(&tx, &delta.track_ids_after)?;
+            apply_label_sets(&tx, &delta.labels_after)?;
         }
         tx.execute(
             "UPDATE edits SET undone = ?2 WHERE seq = ?1",

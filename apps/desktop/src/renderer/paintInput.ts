@@ -99,11 +99,7 @@ export function paintInput(deps: PaintDeps): PaintHandlers {
       const centre = session.volumeScene.orbCentre()
       if (centre && isPaintTool(nav)) {
         // The readout reports the orb, not a hover pixel, while painting in 3D.
-        session.readout.move(centre, {
-          t: nav.t,
-          channel: nav.activeChannel,
-          labels: nav.overlays.labels.on,
-        })
+        session.readout.move(centre)
       }
       return centre
     }

@@ -1,8 +1,17 @@
-import type { CellRow, Histogram, JobState, LineageTree } from '@cellstudio/api-client'
+import type {
+  CellRow,
+  Histogram,
+  JobState,
+  LabelDefinitionInput,
+  LabelState,
+  LineageTree,
+  SetLabelsBody,
+} from '@cellstudio/api-client'
 import { useNav } from '@cellstudio/viewer'
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Inspector, type InspectorTab } from './inspector/Inspector'
 import { isToolEnabled, isTypingTarget, resolveKey } from './lib/keymap'
+import { statesFromRow, toggleBody } from './lib/labels'
 import { MenuBar } from './shell/MenuBar'
 import { Ribbon } from './shell/Ribbon'
 import { ShortcutsDialog } from './shell/ShortcutsDialog'
@@ -17,7 +26,6 @@ import type {
   DisplayState,
   HistoryEntry,
   MenuId,
-  PerfSample,
   ProjectStatus,
 } from './types'
 import { ViewPanel } from './view/ViewPanel'
@@ -28,7 +36,6 @@ export interface AppProps {
   awaitingFrame?: boolean
   backend?: BackendState
   jobs?: readonly JobState[]
-  perf?: PerfSample | null
   cursor?: CursorSample | null
   selection?: CellRow | null
   lineage?: LineageTree | null
@@ -55,6 +62,13 @@ export interface AppProps {
   /** Edit → "Save tracking snapshot". */
   onSaveTrackingSnapshot?: () => void
   canSaveTrackingSnapshot?: boolean
+  /** Server-side per-definition states for the selection; null falls back to the row. */
+  labelStates?: readonly LabelState[] | null
+  /** Fired when the assign-labels popover opens or closes, so the host can fetch states. */
+  onLabelsOpen?: (open: boolean) => void
+  onToggleLabel?: (body: SetLabelsBody) => void
+  onPutLabelDefinitions?: (definitions: LabelDefinitionInput[]) => void
+  onRemoveLabelDefinition?: (name: string) => void
 }
 
 const NO_JOBS: readonly JobState[] = []
@@ -69,7 +83,6 @@ export function App({
   awaitingFrame = false,
   backend = 'starting',
   jobs = NO_JOBS,
-  perf = null,
   cursor = null,
   selection = null,
   lineage = null,
@@ -90,6 +103,11 @@ export function App({
   importTrackingHint,
   onSaveTrackingSnapshot,
   canSaveTrackingSnapshot = false,
+  labelStates = null,
+  onLabelsOpen,
+  onToggleLabel = NOOP,
+  onPutLabelDefinitions = NOOP,
+  onRemoveLabelDefinition = NOOP,
 }: AppProps) {
   const project = useNav((s) => s.project)
   const tool = useNav((s) => s.tool)
@@ -101,6 +119,8 @@ export function App({
   const resetVolumeCamera = useNav((s) => s.resetVolumeCamera)
   const navSelection = useNav((s) => s.selection)
   const navSelectedLink = useNav((s) => s.selectedLink)
+  const labelScope = useNav((s) => s.labelScope)
+  const setLabelScope = useNav((s) => s.setLabelScope)
 
   // Arming preconditions. Link needs a graph and a selection; Unlink acts on
   // whichever is selected — one edge cuts that link, a cell deletes its whole track.
@@ -110,10 +130,43 @@ export function App({
   const [tab, setTab] = useState<InspectorTab>('inspect')
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [labelsOpen, setLabelsOpen] = useState(false)
+
+  const assignEnabled = navSelection !== null
+  useEffect(() => {
+    if (!assignEnabled) setLabelsOpen(false)
+  }, [assignEnabled])
+  useEffect(() => {
+    onLabelsOpen?.(labelsOpen)
+  }, [labelsOpen, onLabelsOpen])
+  const closeLabels = useCallback(() => setLabelsOpen(false), [])
+  const toggleLabels = useCallback(() => {
+    if (assignEnabled) setLabelsOpen((open) => !open)
+  }, [assignEnabled])
+  const definitions = project?.labelDefinitions ?? []
+  const shownStates = labelStates ?? statesFromRow(definitions, selection)
+  const onToggleState = useCallback(
+    (state: LabelState) => {
+      const cellId = useNav.getState().selection?.cellId
+      if (cellId === undefined) return
+      onToggleLabel(toggleBody(state, useNav.getState().labelScope, cellId))
+    },
+    [onToggleLabel],
+  )
+  const assigned = shownStates
+    .filter((s) => (labelScope === 'cell' ? s.cell : s.track !== 'none'))
+    .map((s) => s.name)
+  const unassignEnabled = assignEnabled && assigned.length > 0
+  const onUnassign = useCallback(() => {
+    const cellId = useNav.getState().selection?.cellId
+    if (cellId === undefined || assigned.length === 0) return
+    onToggleLabel({ cellId, scope: labelScope, remove: assigned })
+  }, [onToggleLabel, labelScope, assigned])
 
   const dismiss = useCallback(() => {
     setShortcutsOpen(false)
     setSettingsOpen(false)
+    setLabelsOpen(false)
   }, [])
 
   useEffect(() => {
@@ -147,6 +200,12 @@ export function App({
           // Inert without a selection, matching the ribbon button.
           if (nav.selection !== null || nav.selectedLink !== null) onUnlink()
           break
+        case 'assignLabels':
+          toggleLabels()
+          break
+        case 'unassignLabels':
+          if (unassignEnabled) onUnassign()
+          break
         case 'undo':
           onUndo()
           break
@@ -171,7 +230,17 @@ export function App({
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dismiss, canDeleteMask, onDeleteMask, onUnlink, onUndo, onRedo])
+  }, [
+    dismiss,
+    canDeleteMask,
+    onDeleteMask,
+    onUnlink,
+    onUndo,
+    onRedo,
+    toggleLabels,
+    unassignEnabled,
+    onUnassign,
+  ])
 
   return (
     <div className="app">
@@ -198,6 +267,16 @@ export function App({
         onUnlink={onUnlink}
         unlinkEnabled={unlinkEnabled}
         unlinkTarget={navSelectedLink !== null ? 'edge' : 'track'}
+        assignEnabled={assignEnabled}
+        labelsOpen={labelsOpen}
+        onAssignLabels={toggleLabels}
+        onCloseLabels={closeLabels}
+        labelScope={labelScope}
+        onLabelScope={setLabelScope}
+        labelStates={shownStates}
+        onToggleLabel={onToggleState}
+        unassignEnabled={unassignEnabled}
+        onUnassignLabels={onUnassign}
       />
       <main className="workspace">
         <ViewPanel
@@ -219,18 +298,11 @@ export function App({
           jobs={jobs}
           backend={backend}
           status={status}
+          onPutLabelDefinitions={onPutLabelDefinitions}
+          onRemoveLabelDefinition={onRemoveLabelDefinition}
         />
       </main>
-      <StatusBar
-        cursor={cursor}
-        activeChannel={activeChannel}
-        backend={backend}
-        jobs={jobs}
-        perf={perf}
-        pendingWrites={status.pendingWrites}
-        error={error}
-        notice={notice}
-      />
+      <StatusBar cursor={cursor} error={error} notice={notice} />
       {shortcutsOpen ? <ShortcutsDialog onClose={() => setShortcutsOpen(false)} /> : null}
     </div>
   )

@@ -14,8 +14,6 @@ export const TOOL_KEYS: Record<Tool, string> = {
   pan: 'H',
   brush: 'B',
   eraser: 'E',
-  fill: 'G',
-  pick: 'I',
   link: 'L',
 }
 
@@ -24,13 +22,15 @@ export const TOOL_LABELS: Record<Tool, string> = {
   pan: 'Pan',
   brush: 'Brush',
   eraser: 'Eraser',
-  fill: 'Fill',
-  pick: 'Pick label',
   link: 'Link',
 }
 
 /** Unlink is an action on the selected cell, never a modal tool. */
 export const UNLINK_KEY = 'X'
+/** Assign labels opens a popover over the active tool; also an action, not a tool. */
+export const ASSIGN_LABELS_KEY = 'A'
+/** Clears every label of the popover's scope from the selection; an action like Unlink. */
+export const UNASSIGN_LABELS_KEY = 'U'
 
 export const ENABLED_TOOLS: readonly Tool[] = ['pointer', 'pan', 'brush', 'eraser', 'link']
 
@@ -50,6 +50,8 @@ export type KeyAction =
   | { kind: 'brushRadius'; delta: number }
   | { kind: 'deleteMask' }
   | { kind: 'unlink' }
+  | { kind: 'assignLabels' }
+  | { kind: 'unassignLabels' }
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'resetView' }
@@ -120,6 +122,8 @@ export function resolveKey(e: KeyLike): KeyAction | null {
   const letter = e.key.toUpperCase()
   if (letter === RESET_VIEW_KEY) return { kind: 'resetView' }
   if (letter === UNLINK_KEY) return { kind: 'unlink' }
+  if (letter === ASSIGN_LABELS_KEY) return { kind: 'assignLabels' }
+  if (letter === UNASSIGN_LABELS_KEY) return { kind: 'unassignLabels' }
   const tool = TOOL_BY_KEY.get(letter)
   return tool ? { kind: 'tool', tool } : null
 }
@@ -144,9 +148,10 @@ export const SHORTCUTS: readonly ShortcutRow[] = [
   { action: 'Reset 3D view', keys: RESET_VIEW_KEY },
   { action: 'Pointer / pan', keys: `${TOOL_KEYS.pointer} / ${TOOL_KEYS.pan}` },
   { action: 'Brush / eraser', keys: `${TOOL_KEYS.brush} / ${TOOL_KEYS.eraser}` },
-  { action: 'Fill / pick label', keys: `${TOOL_KEYS.fill} / ${TOOL_KEYS.pick}` },
   { action: 'Link (arms on the selected cell)', keys: TOOL_KEYS.link },
   { action: 'Unlink selected track', keys: UNLINK_KEY },
+  { action: 'Assign labels to the selected cell or track', keys: ASSIGN_LABELS_KEY },
+  { action: 'Unassign labels (popover scope)', keys: UNASSIGN_LABELS_KEY },
   { action: 'Brush radius down / up', keys: '- / =' },
   { action: 'Brush radius (over the view)', keys: 'Shift+wheel' },
   { action: 'Pan or orbit while painting', keys: 'Alt+drag' },

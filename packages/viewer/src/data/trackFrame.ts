@@ -18,6 +18,27 @@ export interface TrackFrame {
 }
 
 /**
+ * The same frame with highlighted cells redirected to `HIGHLIGHT_BASE + slot`, so the
+ * remap paints them in a highlight colour instead of their track's. Cache keys must carry
+ * the slot signature alongside the version, since the frame's own fields do not change.
+ */
+export function withHighlightSlots(
+  frame: TrackFrame,
+  slots: ReadonlyMap<number, number>,
+  base: number,
+  stride = 1,
+): TrackFrame {
+  if (slots.size === 0) return frame
+  return {
+    ...frame,
+    trackIdFor: (cellId: number) => {
+      const slot = slots.get(cellId)
+      return slot === undefined ? frame.trackIdFor(cellId) : base + slot * stride
+    },
+  }
+}
+
+/**
  * Display copies of the label planes/volumes on screen, u32. Half of `PlaneCache`'s
  * 256 MB: the remap holds only what is being drawn, not the scrub history.
  */

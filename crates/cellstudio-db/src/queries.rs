@@ -36,6 +36,9 @@ pub struct CellRow {
     pub src_id: Option<u32>,
     pub seg_id: Option<u32>,
     pub labels: Vec<String>,
+    /// Track-scope labels, written onto every cell of the chain at assignment time.
+    #[serde(default)]
+    pub track_labels: Vec<String>,
     pub features: Map<String, Value>,
     pub reviewed: bool,
 }
@@ -256,7 +259,7 @@ pub struct EditCommit {
 const CELLS_WINDOW_SQL: &str = "\
 SELECT id, t, z, y, x, area, detection_confidence, state, track_id, src_id, seg_id,
        labels, features, reviewed,
-       (SELECT parent FROM links WHERE child = cells.id LIMIT 1)
+       (SELECT parent FROM links WHERE child = cells.id LIMIT 1), track_labels
   FROM cells
  WHERE t >= ?1 AND t <= ?2
    AND (?3 = 0 OR (z BETWEEN ?4 AND ?5 AND y BETWEEN ?6 AND ?7 AND x BETWEEN ?8 AND ?9))
@@ -265,7 +268,7 @@ SELECT id, t, z, y, x, area, detection_confidence, state, track_id, src_id, seg_
 pub(crate) const CELL_BY_ID_SQL: &str = "\
 SELECT id, t, z, y, x, area, detection_confidence, state, track_id, src_id, seg_id,
        labels, features, reviewed,
-       (SELECT parent FROM links WHERE child = cells.id LIMIT 1)
+       (SELECT parent FROM links WHERE child = cells.id LIMIT 1), track_labels
   FROM cells
  WHERE id = ?1";
 
@@ -477,13 +480,14 @@ ON CONFLICT(t, label) DO NOTHING";
 
 const RESTORE_CELL_SQL: &str = "\
 INSERT INTO cells(id, t, z, y, x, area, detection_confidence, state, track_id, src_id, seg_id,
-                  labels, features, reviewed)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                  labels, features, reviewed, track_labels)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
 ON CONFLICT(id) DO UPDATE SET
   t = excluded.t, z = excluded.z, y = excluded.y, x = excluded.x, area = excluded.area,
   detection_confidence = excluded.detection_confidence, state = excluded.state,
   track_id = excluded.track_id, src_id = excluded.src_id, seg_id = excluded.seg_id,
-  labels = excluded.labels, features = excluded.features, reviewed = excluded.reviewed";
+  labels = excluded.labels, features = excluded.features, reviewed = excluded.reviewed,
+  track_labels = excluded.track_labels";
 
 impl Db {
     /// Journals a mask edit with `pending = 1` and its chunk snapshots in one transaction, so
@@ -698,6 +702,7 @@ DELETE FROM edit_blobs WHERE seq NOT IN (
                     removed_links,
                     track_ids_before: before,
                     track_ids_after: after,
+                    ..crate::graph::GraphDelta::default()
                 };
                 (!delta.is_empty()).then_some(delta)
             }
@@ -1081,6 +1086,7 @@ fn restore_cell_in(conn: &Connection, snapshot: &CellSnapshot) -> Result<(), DbE
             serde_json::to_string(&cell.labels)?,
             serde_json::to_string(&cell.features)?,
             i64::from(cell.reviewed),
+            labels_text(&cell.track_labels),
         ],
     )?;
     conn.execute(
@@ -1135,10 +1141,19 @@ pub(crate) fn cell_row(row: &Row<'_>) -> Result<CellRow, DbError> {
         features: parse_features(row.get::<_, Option<String>>(12)?)?,
         reviewed: row.get::<_, i64>(13)? != 0,
         parent_id: row.get::<_, Option<i64>>(14)?.map(to_u32).transpose()?,
+        track_labels: parse_labels(row.get::<_, Option<String>>(15)?)?,
     })
 }
 
-fn parse_labels(raw: Option<String>) -> Result<Vec<String>, DbError> {
+/// JSON text for a label column, or NULL for an empty set.
+pub(crate) fn labels_text(labels: &[String]) -> Option<String> {
+    match labels.is_empty() {
+        true => None,
+        false => serde_json::to_string(labels).ok(),
+    }
+}
+
+pub(crate) fn parse_labels(raw: Option<String>) -> Result<Vec<String>, DbError> {
     match raw.as_deref() {
         None | Some("") => Ok(Vec::new()),
         Some(text) => Ok(serde_json::from_str(text)?),

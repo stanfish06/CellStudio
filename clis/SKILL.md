@@ -26,18 +26,18 @@ cellstudio run <tool> exec <config.yaml> [--gpu]  # run (CPU default)
 
 ## Pitfalls
 
-| Symptom | Fix |
-|---|---|
-| cellpose finds 0 objects | auto-diameter fails on clean/synthetic images: set `options.eval.diameter` |
-| first exec very slow | pretrained weights download once (cellpose 1.15 GB) into the user cache |
-| `--gpu` on a no-NVIDIA machine | fine: warns and runs on CPU (laptrack/ultrack are CPU-only always) |
-| stardist on a timelapse | set `options.per_frame: true` (2D model per frame) |
-| laptrack overlap mode links everything | default `cutoff: 225` accepts any overlapping pair; overlap distances are ~[0,1], use e.g. 0.9 |
-| laptrack centroid cutoff confusion | default metric is sqeuclidean, so `cutoff` is squared px distance (225 = 15 px max jump) |
-| ultrack rerun errors / leftovers | it keeps a database in `options.data.working_dir` (default `.ultrack/` in cwd); `overwrite: all` is the default |
+| Symptom                                                                 | Fix                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| cellpose finds 0 objects                                                | auto-diameter fails on clean/synthetic images: set `options.eval.diameter`                                                                                                                                                                                                |
+| first exec very slow                                                    | pretrained weights download once (cellpose 1.15 GB) into the user cache                                                                                                                                                                                                   |
+| `--gpu` on a no-NVIDIA machine                                          | fine: warns and runs on CPU (laptrack/ultrack are CPU-only always)                                                                                                                                                                                                        |
+| stardist on a timelapse                                                 | set `options.per_frame: true` (2D model per frame)                                                                                                                                                                                                                        |
+| laptrack overlap mode links everything                                  | default `cutoff: 225` accepts any overlapping pair; overlap distances are ~[0,1], use e.g. 0.9                                                                                                                                                                            |
+| laptrack centroid cutoff confusion                                      | default metric is sqeuclidean, so `cutoff` is squared px distance (225 = 15 px max jump)                                                                                                                                                                                  |
+| ultrack rerun errors / leftovers                                        | it keeps a database in `options.data.working_dir` (default `.ultrack/` in cwd); `overwrite: all` is the default                                                                                                                                                           |
 | wrong torch build for the GPU ("does not include kernels for this GPU") | set top-level `cuda: cu126\|cu130` in the config yaml (cu126 covers V100-H100, default; cu130 = Blackwell). Resolution: `CELLSTUDIO_TORCH` env > yaml `cuda:` > `.torch-gpu` marker > NVIDIA detection; standalone `uv run` users pass `--no-group cpu --group gpu-cuXXX` |
-| ims/vsi/oir/oib inputs | `cellstudio run` auto-enables the segmenter's `bioformats` group when the exec config mentions one (persisted in a `.bioformats` marker); standalone `uv run` users pass `--group bioformats` themselves |
-| segmenting the wrong channel of a multi-channel file | set `io.input.channel` (name or index); the `[io]` log line lists the file's channel names |
+| ims/vsi/oir/oib inputs                                                  | `cellstudio run` auto-enables the segmenter's `bioformats` group when the exec config mentions one (persisted in a `.bioformats` marker); standalone `uv run` users pass `--group bioformats` themselves                                                                  |
+| segmenting the wrong channel of a multi-channel file                    | set `io.input.channel` (name or index); the `[io]` log line lists the file's channel names                                                                                                                                                                                |
 
 ## Extending
 

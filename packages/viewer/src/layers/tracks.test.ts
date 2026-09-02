@@ -3,13 +3,15 @@ import {
   SELECTED_COLOR,
   buildLineageEdges,
   buildTracks,
+  highlightSlots,
+  labeledCells,
   inSlab,
   inTrailWindow,
   shownTracks,
   trackColor,
   trackSpans,
-  withLineageEdges,
   type LineageOverlay,
+  withLineageEdges,
 } from './tracks'
 import { LABEL_PALETTE, LABEL_PALETTE_SIZE, labelColor, trackPaletteIndex } from './labelPalette'
 import { makeWorldTransform } from '../data/world'
@@ -142,6 +144,55 @@ describe('buildTracks', () => {
     const selected = built.points.find((p) => p.selected)
     expect(selected?.color).toEqual([255, 255, 255])
     expect(built.segments.some((s) => s.selected)).toBe(true)
+  })
+
+  it('colours cells carrying a highlighted label, with the selection winning', () => {
+    const cells = track(9, [1, 1, 1]).map((c, i) => ({
+      ...c,
+      labels: i === 1 ? ['verified'] : [],
+      trackLabels: i === 2 ? ['verified'] : [],
+    }))
+    const amber: [number, number, number] = [255, 191, 105]
+    const highlighted = labeledCells(cells, 2, [{ name: 'verified', color: amber }])
+    expect([...(highlighted?.keys() ?? [])]).toEqual([cells[2]?.id])
+    expect(labeledCells(cells, 1, [{ name: 'verified', color: amber }])?.size).toBe(1)
+    expect(labeledCells(cells, 1, [])).toBeUndefined()
+    const built = buildTracks({
+      cells,
+      t: 2,
+      trail: 2,
+      transform,
+      highlighted,
+      lineage: new Set([cells[2]?.id ?? -1]),
+    })
+    const point = built.points.find((p) => p.cellId === cells[2]?.id)
+    expect(point?.highlighted).toBe(true)
+    expect(point?.color).toEqual([255, 255, 255])
+    const alone = buildTracks({ cells, t: 2, trail: 2, transform, highlighted })
+    expect(alone.points.find((p) => p.cellId === cells[2]?.id)?.color).toEqual(amber)
+  })
+
+  it('assigns highlight slots per label in sheet order, capped at the shader slot count', () => {
+    const cells = track(9, [1, 1, 1]).map((c, i) => ({
+      ...c,
+      labels: i === 0 ? ['a'] : i === 1 ? ['a', 'b'] : ['c'],
+      trackLabels: [],
+    }))
+    const hl = (name: string, color: [number, number, number]) => ({ name, color })
+    const { slots, colors, signature } = highlightSlots(
+      cells,
+      1,
+      [hl('b', [1, 1, 1]), hl('a', [2, 2, 2]), hl('c', [3, 3, 3])],
+      2,
+    )
+    expect(slots.get(cells[1]?.id ?? -1)).toBe(0)
+    expect(slots.has(cells[0]?.id ?? -1)).toBe(false)
+    expect(colors).toEqual([
+      [1, 1, 1],
+      [2, 2, 2],
+    ])
+    expect(signature).toContain('1.1.1|2.2.2#')
+    expect(highlightSlots(cells, 1, [], 8).slots.size).toBe(0)
   })
 
   it('falls back to the cell id when a row has no track', () => {

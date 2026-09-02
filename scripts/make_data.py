@@ -606,6 +606,9 @@ def tracking_graph() -> list[dict[str, Any]]:
                 record["labels"] = ["ESI", "treated"]
             elif j == 3:
                 record["labels"] = ["control"]
+            # track-scope tag on the pre-division chain (cells 1 and 7)
+            if j == 0 and t <= 1:
+                record["track_labels"] = ["cell type 1"]
             records.append(record)
     return records
 
@@ -618,6 +621,8 @@ def tracking_document(cells: list[dict[str, Any]], source: str) -> dict[str, Any
             "created": "2026-08-21T00:00:00Z",
             "source": source,
             "shape_tczyx": [TINY_T, TINY_C, TINY_Z, TINY_Y, TINY_X],
+            # the full vocabulary, including a name no cell carries
+            "label_definitions": ["ESI", "cell type 1", "control", "treated", "unused"],
         },
         "cells": cells,
     }

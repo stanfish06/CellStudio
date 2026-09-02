@@ -33,17 +33,6 @@ export const TOOL_ICONS: Record<Tool, () => ReactElement> = {
       <path d="M4 15l9-11 7 6-8 10H8zM12 20h9" />
     </svg>
   ),
-  fill: () => (
-    <svg {...box}>
-      <path d="M4 14l8-9 7 7-8 8H4zM9 8l7 7M18 17s-2 2.2-2 3.2a2 2 0 004 0C20 19.2 18 17 18 17z" />
-    </svg>
-  ),
-  pick: () => (
-    <svg {...box}>
-      <path d="M14 4l6 6-9 9H5v-6zM15 5l2-2 4 4-2 2" />
-      <circle cx="7" cy="17" r="1" />
-    </svg>
-  ),
   link: () => (
     <svg {...box}>
       <path d="M10 13a4 4 0 005.7.1l2-2a4 4 0 00-5.7-5.7l-1.1 1.1M14 11a4 4 0 00-5.7-.1l-2 2A4 4 0 0012 18.6l1.1-1.1" />
@@ -55,6 +44,20 @@ export const TOOL_ICONS: Record<Tool, () => ReactElement> = {
 export const UnlinkIcon = () => (
   <svg {...box}>
     <path d="M8.5 8.5L6 11a4 4 0 005.7 5.7l1-1M15.5 15.5L18 13a4 4 0 00-5.7-5.7l-1 1M4 4l16 16" />
+  </svg>
+)
+
+export const TagIcon = () => (
+  <svg {...box}>
+    <path d="M4 4h7l9 9-7 7-9-9V4z" />
+    <circle cx="8" cy="8" r="1.3" />
+  </svg>
+)
+
+export const UntagIcon = () => (
+  <svg {...box}>
+    <path d="M4 4h7l9 9-7 7-9-9V4z" />
+    <path d="M4 4l16 16" />
   </svg>
 )
 

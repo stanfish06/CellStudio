@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RemapCache, remapToTracks, type TrackFrame } from './trackFrame'
+import { RemapCache, type TrackFrame, remapToTracks, withHighlightSlots } from './trackFrame'
 import { makeLabelPlane, makeLabelVolume } from '../test/data'
 import type { PlaneBuffer } from '@cellstudio/api-client'
 
@@ -122,5 +122,23 @@ describe('RemapCache', () => {
     expect(cache.stats.bytes).toBeLessThanOrEqual(8)
     cache.clear()
     expect(cache.stats).toEqual({ entries: 0, bytes: 0 })
+  })
+})
+
+describe('withHighlightSlots', () => {
+  it('redirects slotted cells to the highlight range and leaves the rest to the frame', () => {
+    const frame = {
+      graphVersion: 1,
+      revision: 1,
+      t0: 0,
+      t1: 0,
+      ready: true,
+      trackIdFor: (id: number) => (id === 7 ? 70 : null),
+    }
+    const shown = withHighlightSlots(frame, new Map([[9, 1]]), 1000)
+    expect(shown.trackIdFor(9)).toBe(1001)
+    expect(shown.trackIdFor(7)).toBe(70)
+    expect(shown.trackIdFor(8)).toBe(null)
+    expect(withHighlightSlots(frame, new Map(), 1000)).toBe(frame)
   })
 })

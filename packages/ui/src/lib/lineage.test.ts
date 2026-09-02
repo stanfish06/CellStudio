@@ -12,6 +12,8 @@ const cell = (id: number, t: number, confidence: number | null = 0.9): CellRow =
   trackId: 94,
   parentId: null,
   reviewed: false,
+  labels: [],
+  trackLabels: [],
 })
 
 const tree: LineageTree = {

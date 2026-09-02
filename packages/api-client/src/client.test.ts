@@ -422,6 +422,8 @@ describe('ApiClient graph edits', () => {
         trackId: 5,
         parentId: 12,
         reviewed: false,
+        labels: [],
+        trackLabels: ['cell type 1'],
       },
     ],
     affectedTracks: [5],
@@ -470,6 +472,59 @@ describe('ApiClient graph edits', () => {
     expect(new Headers(link?.init?.headers).get(SESSION)).toBe('sess-1')
     expect(unlink?.url).toBe('http://127.0.0.1:7777/graph/unlink')
     expect(JSON.parse(String(unlink?.init?.body))).toEqual({ cellId: 17 })
+  })
+
+  it('posts label edits and reads label states', async () => {
+    const states = [{ name: 'verified', cell: true, track: 'some' }]
+    const { api, calls } = await opened((url) =>
+      json(url.includes('?cell=') ? states : graphResult, { headers: { [SESSION]: 'sess-1' } }),
+    )
+
+    const edited = await api.setLabels({ cellId: 17, scope: 'track', add: ['cell type 1'] })
+    expect(edited.affectedCells[0]?.trackLabels).toEqual(['cell type 1'])
+    const read = await api.labelStates(17)
+    expect(read).toEqual(states)
+
+    const [post, get] = calls.slice(1)
+    expect(post?.url).toBe('http://127.0.0.1:7777/graph/labels')
+    expect(post?.init?.method).toBe('POST')
+    expect(JSON.parse(String(post?.init?.body))).toEqual({
+      cellId: 17,
+      scope: 'track',
+      add: ['cell type 1'],
+    })
+    expect(new Headers(post?.init?.headers).get(SESSION)).toBe('sess-1')
+    expect(get?.url).toBe('http://127.0.0.1:7777/graph/labels?cell=17')
+    expect(get?.init?.method).toBe('GET')
+    expect(new Headers(get?.init?.headers).get(SESSION)).toBeNull()
+  })
+
+  it('reads, replaces, and deletes label definitions with the fence on writes', async () => {
+    const definitions = { sessionId: 'sess-1', definitions: [{ name: 'a b', uses: 2 }] }
+    const { api, calls } = await opened((url, init) =>
+      json(init?.method === 'DELETE' ? { ...definitions, edit: graphResult } : definitions, {
+        headers: { [SESSION]: 'sess-1' },
+      }),
+    )
+
+    expect((await api.getLabelDefinitions()).definitions[0]?.uses).toBe(2)
+    expect(
+      (await api.putLabelDefinitions([{ name: 'a b', color: '#ff0000' }])).edit,
+    ).toBeUndefined()
+    const deleted = await api.deleteLabelDefinition('a b')
+    expect(deleted.edit?.domain).toBe('graph')
+
+    const [get, put, del] = calls.slice(1)
+    expect(get?.url).toBe('http://127.0.0.1:7777/project/label-definitions')
+    expect(new Headers(get?.init?.headers).get(SESSION)).toBeNull()
+    expect(put?.init?.method).toBe('PUT')
+    expect(JSON.parse(String(put?.init?.body))).toEqual({
+      definitions: [{ name: 'a b', color: '#ff0000' }],
+    })
+    expect(new Headers(put?.init?.headers).get(SESSION)).toBe('sess-1')
+    expect(del?.url).toBe('http://127.0.0.1:7777/project/label-definitions/a%20b')
+    expect(del?.init?.method).toBe('DELETE')
+    expect(new Headers(del?.init?.headers).get(SESSION)).toBe('sess-1')
   })
 
   it('parses undo and redo as the discriminated union, by domain', async () => {

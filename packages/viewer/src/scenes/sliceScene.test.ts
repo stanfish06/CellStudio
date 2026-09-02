@@ -435,6 +435,48 @@ describe('SliceScene track-colored labels.', () => {
     expect(scene.layers().some((l) => l.id.endsWith('-tracks'))).toBe(false)
   })
 
+  it('keeps the fill on track ids while a label is highlighted and adds the outline layer', async () => {
+    class FakeImageData {
+      constructor(
+        readonly data: Uint8ClampedArray,
+        readonly width: number,
+        readonly height: number,
+      ) {}
+    }
+    vi.stubGlobal('ImageData', FakeImageData)
+    const { api, scene } = setupTracked()
+    api.slice = (q, signal) =>
+      FakeApi.prototype.slice.call(api, q, signal).then((plane: PlaneBuffer) => {
+        if (q.layer === 'labels') {
+          const ids = new Uint32Array(plane.data)
+          const [, width] = plane.shape
+          for (let i = 0; i < ids.length; i += 1) ids[i] = i % width < width / 2 ? 77 : 0
+        }
+        return plane
+      })
+    api.cells = [{ ...cell(77, 0, [512, 100, 200], 5), labels: ['verified'] }]
+    scene.update(
+      navSnapshot(project, {
+        activeView: 'xz',
+        index: { xz: 512 },
+        t: 0,
+        highlightLabels: ['verified'],
+      }),
+    )
+    await settle()
+    expect(shownId(scene)).toBe(5)
+    expect(labelLayer(scene).highlightColors).toEqual([])
+    const outline = scene.layers().find((l) => l.id.endsWith('-label-outline'))
+    expect(outline).toBeDefined()
+    const image = layerProps(outline).image as FakeImageData
+    expect(image.width).toBe(1024)
+    const at = (x: number) => image.data[(1 * 1024 + x) * 4 + 3]
+    expect(at(511)).toBe(255)
+    expect(at(512)).toBe(255)
+    expect(at(1000)).toBe(0)
+    vi.unstubAllGlobals()
+  })
+
   it('translates the selected cell id to its track id for the shader highlight', async () => {
     const { scene } = setupTracked()
     scene.update(

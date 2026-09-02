@@ -1,14 +1,26 @@
+import type { LabelScope, LabelState } from '@cellstudio/api-client'
 import { BRUSH_RADIUS_MAX, BRUSH_RADIUS_MIN, type Tool } from '@cellstudio/viewer'
 import { useState } from 'react'
-import { DeleteMaskIcon, HelpIcon, ResetViewIcon, TOOL_ICONS, UnlinkIcon } from '../icons'
 import {
+  DeleteMaskIcon,
+  HelpIcon,
+  ResetViewIcon,
+  TOOL_ICONS,
+  TagIcon,
+  UnlinkIcon,
+  UntagIcon,
+} from '../icons'
+import {
+  ASSIGN_LABELS_KEY,
   RESET_VIEW_KEY,
+  UNASSIGN_LABELS_KEY,
   TOOL_KEYS,
   TOOL_LABELS,
   UNLINK_KEY,
   isPaintTool,
   isToolEnabled,
 } from '../lib/keymap'
+import { LabelPopover } from './LabelPopover'
 
 interface ToolGroup {
   caption: string
@@ -17,8 +29,9 @@ interface ToolGroup {
 
 const GROUPS: readonly ToolGroup[] = [
   { caption: 'Navigation', tools: ['pointer', 'pan'] },
-  { caption: 'Mask edit', tools: ['brush', 'eraser', 'fill', 'pick'] },
+  { caption: 'Mask edit', tools: ['brush', 'eraser'] },
   { caption: 'Track edit', tools: ['link'] },
+  { caption: 'Annotate', tools: [] },
 ]
 
 export interface RibbonProps {
@@ -39,6 +52,18 @@ export interface RibbonProps {
   unlinkTarget?: 'edge' | 'track'
   /** Unlink acts on the selection; enabled exactly while a cell or an edge is selected. */
   unlinkEnabled: boolean
+  /** Assign labels needs a selected cell; it opens a popover instead of changing the tool. */
+  assignEnabled: boolean
+  labelsOpen: boolean
+  onAssignLabels: () => void
+  onCloseLabels: () => void
+  labelScope: LabelScope
+  onLabelScope: (scope: LabelScope) => void
+  labelStates: readonly LabelState[]
+  onToggleLabel: (state: LabelState) => void
+  /** Clears every label of the popover's scope from the selection. */
+  unassignEnabled: boolean
+  onUnassignLabels: () => void
 }
 
 export function Ribbon({
@@ -55,6 +80,16 @@ export function Ribbon({
   onUnlink,
   unlinkTarget = 'track',
   unlinkEnabled,
+  assignEnabled,
+  labelsOpen,
+  onAssignLabels,
+  onCloseLabels,
+  labelScope,
+  onLabelScope,
+  labelStates,
+  onToggleLabel,
+  unassignEnabled,
+  onUnassignLabels,
 }: RibbonProps) {
   return (
     <div className="ribbon" role="toolbar" aria-label="Editing tools">
@@ -152,6 +187,53 @@ export function Ribbon({
                 <span className="ribbon-label">Unlink</span>
                 <span className="key">{UNLINK_KEY}</span>
               </button>
+            ) : null}
+            {group.caption === 'Annotate' ? (
+              <>
+                <button
+                  type="button"
+                  className={labelsOpen ? 'ribbon-tool active' : 'ribbon-tool'}
+                  title={
+                    assignEnabled
+                      ? `Assign labels (${ASSIGN_LABELS_KEY})`
+                      : `Assign labels (${ASSIGN_LABELS_KEY}) — select a cell`
+                  }
+                  aria-pressed={labelsOpen}
+                  data-label-anchor
+                  aria-haspopup="dialog"
+                  aria-expanded={labelsOpen}
+                  disabled={!assignEnabled}
+                  onClick={onAssignLabels}
+                >
+                  <TagIcon />
+                  <span className="ribbon-label">Assign labels</span>
+                  <span className="key">{ASSIGN_LABELS_KEY}</span>
+                </button>
+                {labelsOpen ? (
+                  <LabelPopover
+                    scope={labelScope}
+                    onScope={onLabelScope}
+                    states={labelStates}
+                    onToggle={onToggleLabel}
+                    onClose={onCloseLabels}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  className="ribbon-tool"
+                  title={
+                    unassignEnabled
+                      ? `Unassign every ${labelScope} label from the selection (${UNASSIGN_LABELS_KEY})`
+                      : `Unassign labels (${UNASSIGN_LABELS_KEY}) — the selection carries no ${labelScope} label`
+                  }
+                  disabled={!unassignEnabled}
+                  onClick={onUnassignLabels}
+                >
+                  <UntagIcon />
+                  <span className="ribbon-label">Unassign</span>
+                  <span className="key">{UNASSIGN_LABELS_KEY}</span>
+                </button>
+              </>
             ) : null}
             <span className="ribbon-group-title" id={captionId}>
               {group.caption}

@@ -21,7 +21,7 @@ use cellstudio_core::reader::ImageReader;
 use cellstudio_db::queries::{
     CellChange, CellRow, ChunkSnapshot, EditDomain, ExtentDelta, ExtentRow, GraphStep, MaskInverse,
 };
-use cellstudio_db::{DbError, GraphCommit, GraphError, Project};
+use cellstudio_db::{DbError, GraphCommit, GraphError, LabelScope, Project};
 use parking_lot::{Mutex, RwLock, RwLockReadGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -85,7 +85,7 @@ pub enum MaskCommand {
     Delete { t: u64, label: u32 },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum GraphCommand {
     Link {
         parent_id: u32,
@@ -98,6 +98,17 @@ pub enum GraphCommand {
     Cut {
         parent_id: u32,
         child_id: u32,
+    },
+    /// Add and remove label names on one cell or on every cell of its chain.
+    SetLabels {
+        cell_id: u32,
+        scope: LabelScope,
+        add: Vec<String>,
+        remove: Vec<String>,
+    },
+    /// Remove one name from every cell carrying it, in either scope.
+    StripLabel {
+        name: String,
     },
 }
 
@@ -268,6 +279,20 @@ impl ProjectEditCoordinator {
                 parent_id,
                 child_id,
             } => self.project.db.graph_cut(parent_id, child_id)?,
+            GraphCommand::SetLabels {
+                cell_id,
+                scope,
+                add,
+                remove,
+            } => self
+                .project
+                .db
+                .graph_set_labels(cell_id, scope, &add, &remove)?,
+            GraphCommand::StripLabel { name } => self
+                .project
+                .db
+                .graph_strip_label(&name)?
+                .ok_or(EditError::NothingTo("strip: no cell carries that label"))?,
         };
         self.announce_graph(
             session,

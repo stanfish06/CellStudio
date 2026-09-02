@@ -139,3 +139,35 @@ fn a_record_failure_mid_stream_surfaces_after_the_good_records() {
         "the truncation is an error, not an end"
     );
 }
+
+#[test]
+fn track_labels_and_definitions_are_optional_v1_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = write(
+        &dir,
+        "labels.json",
+        r#"{"format":"cellstudio-tracking","version":1,
+            "metadata":{"label_definitions":["a","b"]},
+            "cells":[{"id":1,"t":0,"track_labels":["a"],"labels":["b"]},{"id":2,"t":1}]}"#,
+    );
+    let stream = open_tracking(&path).expect("open");
+    assert_eq!(stream.header.metadata.label_definitions, vec!["a", "b"]);
+    let records: Vec<CellRecord> = stream.records.map(|r| r.expect("record")).collect();
+    assert_eq!(records[0].track_labels, vec!["a"]);
+    assert_eq!(records[0].labels, vec!["b"]);
+    assert!(records[1].track_labels.is_empty() && records[1].labels.is_empty());
+
+    let without = write(
+        &dir,
+        "plain.json",
+        r#"{"format":"cellstudio-tracking","version":1,"metadata":{},"cells":[{"id":1,"t":0}]}"#,
+    );
+    let mut stream = open_tracking(&without).expect("open");
+    assert!(stream.header.metadata.label_definitions.is_empty());
+    let json = serde_json::to_string(&stream.records.next().expect("one").expect("record"))
+        .expect("serialize");
+    assert!(
+        !json.contains("track_labels"),
+        "empty arrays are omitted: {json}"
+    );
+}

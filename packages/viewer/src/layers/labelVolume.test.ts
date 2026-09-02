@@ -92,7 +92,7 @@ describe('labelVolumeExtension', () => {
     }
     extension.updateState.call(host as never)
     expect(setProps).toHaveBeenCalledWith({
-      [LABEL_MODULE_NAME]: { selectedLabel: 5, labelOpacity: 0 },
+      [LABEL_MODULE_NAME]: expect.objectContaining({ selectedLabel: 5, labelOpacity: 0 }),
     })
   })
 })

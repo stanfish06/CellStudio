@@ -55,6 +55,21 @@ export const LayoutAdvisory = z.object({
 })
 export type LayoutAdvisory = z.infer<typeof LayoutAdvisory>
 
+export const LabelDefinition = z.object({
+  name: z.string(),
+  /** Cells carrying the name in either scope. */
+  uses: z.number().int().nonnegative(),
+  /** `#rrggbb`, or null until the user picks one. */
+  color: z.string().nullable().optional(),
+})
+export type LabelDefinition = z.infer<typeof LabelDefinition>
+
+/** One stored definition as `PUT /project/label-definitions` takes it. */
+export interface LabelDefinitionInput {
+  name: string
+  color?: string | null
+}
+
 export const ProjectInfo = z.object({
   sessionId: z.string(),
   sourcePath: z.string(),
@@ -73,6 +88,8 @@ export const ProjectInfo = z.object({
    * stay valid.
    */
   hasGraph: z.boolean().optional(),
+  /** Stored label definitions ∪ names on cells; the server always sends it. */
+  labelDefinitions: z.array(LabelDefinition).optional(),
 })
 export type ProjectInfo = z.infer<typeof ProjectInfo>
 
@@ -91,8 +108,33 @@ export const CellRow = z.object({
   /** The parent cell's id, so a trail can walk from a daughter into its parent track. */
   parentId: u32.nullable(),
   reviewed: z.boolean(),
+  /** Cell-scope user labels. */
+  labels: z.array(z.string()),
+  /** Track-scope user labels, written onto every cell of the chain at assignment time. */
+  trackLabels: z.array(z.string()),
 })
 export type CellRow = z.infer<typeof CellRow>
+
+export const LabelScope = z.enum(['cell', 'track'])
+export type LabelScope = z.infer<typeof LabelScope>
+
+export const TrackCoverage = z.enum(['all', 'none', 'some'])
+export type TrackCoverage = z.infer<typeof TrackCoverage>
+
+/** One definition's state on a selected cell and over its chain. */
+export const LabelState = z.object({
+  name: z.string(),
+  cell: z.boolean(),
+  track: TrackCoverage,
+})
+export type LabelState = z.infer<typeof LabelState>
+
+export interface SetLabelsBody {
+  cellId: number
+  scope: LabelScope
+  add?: string[]
+  remove?: string[]
+}
 
 export const LinkRow = z.object({
   parent: u32,
@@ -237,6 +279,14 @@ export type GraphEditResult = z.infer<typeof GraphEditResult>
 /** `/edits/undo|redo` answer with whichever domain the journal row carried. */
 export const EditResult = z.union([MaskEditResult, GraphEditResult])
 export type EditResult = z.infer<typeof EditResult>
+
+/** The definition list after a GET/PUT/DELETE; `edit` is the strip a DELETE journaled. */
+export const LabelDefinitionsResult = z.object({
+  sessionId: z.string(),
+  definitions: z.array(LabelDefinition),
+  edit: GraphEditResult.optional(),
+})
+export type LabelDefinitionsResult = z.infer<typeof LabelDefinitionsResult>
 
 export const LinkBody = z.object({ parentId: u32, childId: u32 })
 export type LinkBody = z.infer<typeof LinkBody>

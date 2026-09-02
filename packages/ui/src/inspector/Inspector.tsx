@@ -1,4 +1,4 @@
-import type { CellRow, JobState, LineageTree } from '@cellstudio/api-client'
+import type { CellRow, JobState, LabelDefinitionInput, LineageTree } from '@cellstudio/api-client'
 import type { BackendState, HistoryEntry, ProjectStatus } from '../types'
 import { HistoryPanel } from './HistoryPanel'
 import { InspectPanel } from './InspectPanel'
@@ -21,6 +21,9 @@ export interface InspectorProps {
   jobs: readonly JobState[]
   backend: BackendState
   status: ProjectStatus
+  /** The label sheet's writes: the full stored list after an add, one name to remove. */
+  onPutLabelDefinitions: (definitions: LabelDefinitionInput[]) => void
+  onRemoveLabelDefinition: (name: string) => void
 }
 
 export function Inspector({
@@ -32,6 +35,8 @@ export function Inspector({
   jobs,
   backend,
   status,
+  onPutLabelDefinitions,
+  onRemoveLabelDefinition,
 }: InspectorProps) {
   return (
     <aside className="inspector" aria-label="Context panel">
@@ -51,7 +56,14 @@ export function Inspector({
       </div>
       <div className="panel-scroll" role="tabpanel">
         {tab === 'inspect' ? (
-          <InspectPanel selection={selection} jobs={jobs} backend={backend} status={status} />
+          <InspectPanel
+            selection={selection}
+            jobs={jobs}
+            backend={backend}
+            status={status}
+            onPutLabelDefinitions={onPutLabelDefinitions}
+            onRemoveLabelDefinition={onRemoveLabelDefinition}
+          />
         ) : null}
         {tab === 'lineage' ? <LineagePanel lineage={lineage} /> : null}
         {tab === 'history' ? <HistoryPanel entries={history} /> : null}

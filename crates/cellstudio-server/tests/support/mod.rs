@@ -131,6 +131,22 @@ impl Server {
         self.client.put(self.url(path)).bearer_auth(&self.token)
     }
 
+    pub fn delete(&self, path: &str) -> reqwest::blocking::RequestBuilder {
+        self.client.delete(self.url(path)).bearer_auth(&self.token)
+    }
+
+    /// A session-fenced non-POST mutation, asserted to succeed.
+    pub fn mutate_with(&self, request: reqwest::blocking::RequestBuilder) -> Value {
+        let response = request
+            .header(cellstudio_server::wire::SESSION_HEADER, self.session())
+            .send()
+            .expect("request");
+        let status = response.status();
+        let text = response.text().expect("body");
+        assert!(status.is_success(), "{status}: {text}");
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("body {text:?}: {e}"))
+    }
+
     /// `HEAD`, which a zarr client uses to size an object before ranging into it.
     pub fn head(&self, path: &str) -> reqwest::blocking::RequestBuilder {
         self.client

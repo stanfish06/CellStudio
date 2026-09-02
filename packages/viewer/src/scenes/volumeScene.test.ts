@@ -1,3 +1,4 @@
+import { HIGHLIGHT_BASE, HIGHLIGHT_STRIDE } from '../layers/labelPalette'
 import { describe, expect, it } from 'vitest'
 import { VolumeScene, rayBoxInterval } from './volumeScene'
 import { GpuBudget } from '../data/gpuBudget'
@@ -343,6 +344,32 @@ describe('VolumeScene track-colored labels.', () => {
     const channelData = labels.channelData as { data: (Uint32Array | Float32Array)[] }
     expect(channelData.data[0]?.[0]).toBe(9)
     expect(labels.selectedLabel).toBe(9)
+  })
+
+  it('paints highlighted cells through reserved slot ids with one colour per label', async () => {
+    const { api, scene } = trackedSetup()
+    api.cells = [{ ...cell(42, 5, [1, 10, 20], 9), labels: ['b'] }]
+    scene.update(
+      navSnapshot(
+        devProject({
+          hasLabels: true,
+          hasGraph: true,
+          labelDefinitions: [
+            { name: 'a', uses: 0, color: '#ff0000' },
+            { name: 'b', uses: 1, color: '#00ff00' },
+          ],
+        }),
+        { activeView: '3d', t: 5, labels: ON, highlightLabels: ['a', 'b'] },
+      ),
+    )
+    await settle()
+    const labels = layerProps(scene.layers().find((l) => l.id === 'volume-labels'))
+    const channelData = labels.channelData as { data: (Uint32Array | Float32Array)[] }
+    expect(channelData.data[0]?.[0]).toBe(HIGHLIGHT_BASE + HIGHLIGHT_STRIDE)
+    expect(labels.highlightColors).toEqual([
+      [255, 0, 0],
+      [0, 255, 0],
+    ])
   })
 
   it('passes the fade bounds through to the 3D track layer', async () => {

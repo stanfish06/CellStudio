@@ -1,10 +1,5 @@
-export { CursorReadout, READOUT_THROTTLE_MS } from './cursorReadout'
-export type {
-  CursorContext,
-  CursorReadoutOptions,
-  CursorSample,
-  TrackLookup,
-} from './cursorReadout'
+export { CursorReadout } from './cursorReadout'
+export type { CursorSample } from './cursorReadout'
 export { ViewerSession } from './session'
 export type { GraphAffected, NavActions, ViewerSessionOptions } from './session'
 export { SliceScene, lineageHighlight } from './sliceScene'

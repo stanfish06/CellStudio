@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ViewerSession, useNav, type SceneStatus } from '@cellstudio/viewer'
+import { type CursorSample, type SceneStatus, ViewerSession, useNav } from '@cellstudio/viewer'
 import type { BackendSession } from './useBackend'
 
 const IDLE: SceneStatus = { display: { level: 0, zoom: 0 }, awaitingFrame: false }
@@ -14,6 +14,7 @@ export function useViewerSession(backend: BackendSession | null): {
   status: SceneStatus
   pendingWrites: number
   editError: string | null
+  cursor: CursorSample | null
 } {
   const [session, setSession] = useState<ViewerSession | null>(null)
   const [editError, setEditError] = useState<string | null>(null)
@@ -86,6 +87,11 @@ export function useViewerSession(backend: BackendSession | null): {
     () => session?.pendingWrites ?? 0,
     () => 0,
   )
+  const cursor = useSyncExternalStore(
+    subscribe,
+    () => session?.readout.sample ?? null,
+    () => null,
+  )
 
   // A newly queued edit makes the last failure stale.
   const wasPending = useRef(0)
@@ -94,5 +100,5 @@ export function useViewerSession(backend: BackendSession | null): {
     wasPending.current = pendingWrites
   }, [pendingWrites])
 
-  return { session, status, pendingWrites, editError }
+  return { session, status, pendingWrites, editError, cursor }
 }

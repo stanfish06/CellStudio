@@ -31,6 +31,11 @@
 //   POST /graph/link        {"parentId", "childId"}             -> GraphEditResult
 //   POST /graph/unlink      {"cellId"}                          -> GraphEditResult
 //   POST /graph/cut         {"parentId","childId"}              -> GraphEditResult
+//   GET  /graph/labels      ?cell                               -> LabelState[]
+//   POST /graph/labels      {"cellId","scope","add","remove"}  -> GraphEditResult
+//   GET  /project/label-definitions                             -> LabelDefinitionsResult
+//   PUT  /project/label-definitions {"definitions": [{name,color}]} -> LabelDefinitionsResult
+//   DELETE /project/label-definitions/{name}                    -> LabelDefinitionsResult
 //   POST /edits/undo        no body                             -> EditResult (by domain)
 //   POST /edits/redo        no body                             -> EditResult (by domain)
 //   GET  /ws-ticket                                             -> {"ticket": string}
@@ -47,15 +52,19 @@ import {
   GraphEditResult,
   Histogram,
   JobState,
+  LabelDefinitionsResult,
   LabelLease,
+  LabelState,
   LineageTree,
   MaskEditResult,
   ProjectInfo,
   type Bbox,
   type DeleteMaskBody,
+  type LabelDefinitionInput,
   type LayerId,
   type LinkBody,
   type PlaneBuffer,
+  type SetLabelsBody,
   type StrokeBody,
   type UnlinkBody,
   type VolumeBuffer,
@@ -177,7 +186,7 @@ export interface ApiClientConfig {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST' | 'PUT'
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   query?: Record<string, string | number | undefined>
   body?: unknown
   signal?: AbortSignal
@@ -301,6 +310,36 @@ export class ApiClient {
   }
 
   /** The journal row's domain decides the variant; dispatch on `result.domain`. */
+  setLabels(body: SetLabelsBody): Promise<GraphEditResult> {
+    return this.#json(GraphEditResult, '/graph/labels', { method: 'POST', body, fence: true })
+  }
+
+  /** Per-definition state for the selected cell and its chain. */
+  labelStates(cellId: number): Promise<LabelState[]> {
+    return this.#json(z.array(LabelState), '/graph/labels', { query: { cell: cellId } })
+  }
+
+  getLabelDefinitions(): Promise<LabelDefinitionsResult> {
+    return this.#json(LabelDefinitionsResult, '/project/label-definitions')
+  }
+
+  putLabelDefinitions(definitions: LabelDefinitionInput[]): Promise<LabelDefinitionsResult> {
+    return this.#json(LabelDefinitionsResult, '/project/label-definitions', {
+      method: 'PUT',
+      body: { definitions },
+      fence: true,
+    })
+  }
+
+  /** Strips the name from every cell (one journaled edit) and drops the definition. */
+  deleteLabelDefinition(name: string): Promise<LabelDefinitionsResult> {
+    return this.#json(
+      LabelDefinitionsResult,
+      `/project/label-definitions/${encodeURIComponent(name)}`,
+      { method: 'DELETE', fence: true },
+    )
+  }
+
   undo(): Promise<EditResult> {
     return this.#json(EditResult, '/edits/undo', { method: 'POST', fence: true })
   }

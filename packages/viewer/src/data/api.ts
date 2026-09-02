@@ -4,10 +4,13 @@ import type {
   DeleteMaskBody,
   EditResult,
   GraphEditResult,
+  LabelDefinitionInput,
+  LabelDefinitionsResult,
   LabelLease,
   LayerId,
   MaskEditResult,
   PlaneBuffer,
+  SetLabelsBody,
   StrokeBody,
   VolumeBuffer,
 } from '@cellstudio/api-client'
@@ -38,6 +41,10 @@ export interface GraphApi {
   link(body: { parentId: number; childId: number }): Promise<GraphEditResult>
   unlink(body: { cellId: number }): Promise<GraphEditResult>
   cut(body: { parentId: number; childId: number }): Promise<GraphEditResult>
+  setLabels(body: SetLabelsBody): Promise<GraphEditResult>
+  putLabelDefinitions(definitions: LabelDefinitionInput[]): Promise<LabelDefinitionsResult>
+  /** The strip edit it may carry routes to `advanceGraph` like any other. */
+  deleteLabelDefinition(name: string): Promise<LabelDefinitionsResult>
 }
 
 /** The mask write path; `MaskEditor` holds this, the scenes do not. */

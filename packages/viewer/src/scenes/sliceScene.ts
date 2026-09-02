@@ -1,5 +1,5 @@
 import { COORDINATE_SYSTEM, OrthographicView, type Layer, type PickingInfo } from '@deck.gl/core'
-import { ScatterplotLayer } from '@deck.gl/layers'
+import { BitmapLayer, ScatterplotLayer } from '@deck.gl/layers'
 import { MultiscaleImageLayer } from '@hms-dbmi/viv'
 import type { CellRow, Dims, Level, PlaneBuffer } from '@cellstudio/api-client'
 import type { PixelApi } from '../data/api'
@@ -32,12 +32,15 @@ import {
   orthoPlaneProps,
 } from '../layers/orthoPlane'
 import { clampGamma } from '../layers/gamma'
+import { labelHex, outlineImage } from '../layers/labelOutline'
 import { labelPlaneExtensions, labelPlaneProps } from '../layers/labelPalette'
 import {
-  TrackLayer,
+  type LabelHighlight,
   type LineageOverlay,
+  TrackLayer,
   type TrackPoint,
   type TrackSegment,
+  labeledCells,
 } from '../layers/tracks'
 import { vivLayer } from '../layers/viv'
 import type { PerfMonitor } from '../perf'
@@ -48,7 +51,6 @@ export interface SliceSceneOptions {
   orientation: SliceOrientation
   planes: PlaneCache
   tracks?: TrackSource
-
 
   perf?: PerfMonitor
   budget?: GpuBudget
@@ -120,6 +122,9 @@ export class SliceScene {
   private readonly planes: PlaneCache
   private readonly tracksSource?: TrackSource
   private readonly remaps?: RemapCache
+  /** The cell-id plane behind the label layer on screen, for boundary outlines. */
+  private canonicalLabels: PlaneBuffer | null = null
+  private outline: { plane: PlaneBuffer; signature: string; image: ImageData | null } | null = null
   private readonly perf?: PerfMonitor
   private readonly brick: BrickShape
   private readonly budget: GpuBudget
@@ -195,7 +200,7 @@ export class SliceScene {
   }
 
   /**The selected lineage, replacing the one-element highlight stub*/
-setLineage(overlay: LineageOverlay | null): void {
+  setLineage(overlay: LineageOverlay | null): void {
     if (this.lineage === overlay) return
     this.lineage = overlay
     this.changed.emit()
@@ -357,6 +362,8 @@ setLineage(overlay: LineageOverlay | null): void {
     if (image) out.push(image)
     const labels = this.labelLayer(nav)
     if (labels) out.push(labels)
+    const outline = this.outlineLayer(nav)
+    if (outline) out.push(outline)
     const overlay = this.trackLayer(nav)
     if (overlay) out.push(overlay)
     const cursor = this.cursorLayer(nav)
@@ -566,6 +573,7 @@ setLineage(overlay: LineageOverlay | null): void {
       ? this.editor.planeBuffer(view, base?.plane ?? null)
       : (base?.plane ?? null)
     if (!plane) return null
+    this.canonicalLabels = plane
     const { plane: shown, selectedLabel } = this.displayPlane(nav, plane, base)
     const extent = this.extent()
     return vivLayer(OrthoPlaneLayer, {
@@ -578,6 +586,45 @@ setLineage(overlay: LineageOverlay | null): void {
       }),
       extensions: this.labelExtensions,
     })
+  }
+
+  /**
+   * Boundaries of every current-frame cell carrying a highlighted label, in that label's
+   * colour, drawn from the canonical (cell-id) plane the label layer just used. The bytes
+   * are rebuilt only when the plane or the highlight set changes.
+   */
+  private outlineLayer(nav: NavSnapshot): Layer | null {
+    const plane = this.canonicalLabels
+    const cells = this.tracksSource?.cells
+    const defs = nav.project?.labelDefinitions ?? []
+    if (!plane || !cells || nav.overlays.highlightLabels.length === 0) return null
+    if (typeof ImageData === 'undefined') return null
+    const highlights: LabelHighlight[] = nav.overlays.highlightLabels.map((name) => ({
+      name,
+      color: hexToRgb(labelHex(defs.find((d) => d.name === name) ?? { name })),
+    }))
+    const colors = labeledCells(cells, this.overlayT(nav), highlights)
+    if (!colors || colors.size === 0) return null
+    const signature = `${this.tracksSource?.revision ?? 0}|${[...colors]
+      .map(([id, rgb]) => `${id}:${rgb.join(',')}`)
+      .join(';')}`
+    if (this.outline?.plane !== plane || this.outline.signature !== signature) {
+      const bytes = outlineImage(plane, colors)
+      this.outline = {
+        plane,
+        signature,
+        image: bytes ? new ImageData(bytes.data, bytes.width, bytes.height) : null,
+      }
+    }
+    if (!this.outline.image) return null
+    const extent = this.extent()
+    return new BitmapLayer({
+      id: `${this.id}-label-outline`,
+      image: this.outline.image,
+      bounds: [0, extent.height, extent.width, 0],
+      pickable: false,
+      textureParameters: { minFilter: 'nearest', magFilter: 'nearest' },
+    }) as unknown as Layer
   }
 
   /**

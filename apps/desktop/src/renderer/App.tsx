@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { App as Shell, type HistoryEntry, type MenuId } from '@cellstudio/ui'
 import { useNav } from '@cellstudio/viewer'
-import type { EditEntry, JobState, LineageTree } from '@cellstudio/api-client'
+import type {
+  EditEntry,
+  JobState,
+  LabelDefinitionInput,
+  LabelState,
+  LineageTree,
+  SetLabelsBody,
+} from '@cellstudio/api-client'
 import { useBackend } from './useBackend'
 import { useViewerSession } from './useViewerSession'
 import { SceneCanvas } from './SceneCanvas'
@@ -18,7 +25,7 @@ const historyEntry = (entry: EditEntry): HistoryEntry => ({
 
 export function App() {
   const backend = useBackend()
-  const { session, status, pendingWrites, editError } = useViewerSession(backend.session)
+  const { session, status, pendingWrites, editError, cursor } = useViewerSession(backend.session)
   const initProject = useNav((s) => s.initProject)
   const selectionId = useNav((s) => s.selection?.cellId ?? null)
   const hasGraph = useNav((s) => s.project?.hasGraph ?? false)
@@ -27,6 +34,8 @@ export function App() {
   const [history, setHistory] = useState<readonly HistoryEntry[]>([])
   const [lineage, setLineage] = useState<LineageTree | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [labelsOpen, setLabelsOpen] = useState(false)
+  const [labelStates, setLabelStates] = useState<readonly LabelState[] | null>(null)
 
   useEffect(() => {
     if (backend.project) initProject(backend.project)
@@ -125,6 +134,54 @@ export function App() {
     return session.onGraphAdvance(() => useNav.getState().markGraphPresent())
   }, [session])
 
+  useEffect(() => {
+    const api = backend.session?.api
+    if (!session || !api) return
+    return session.onGraphAdvance(() => {
+      api.getLabelDefinitions().then(
+        (result) => useNav.getState().setLabelDefinitions(result.definitions),
+        () => {},
+      )
+    })
+  }, [session, backend.session])
+
+  useEffect(() => {
+    const api = backend.session?.api
+    if (!labelsOpen || !session || !api || selectionId === null) {
+      setLabelStates(null)
+      return
+    }
+    let live = true
+    let seq = 0
+    const fetchStates = () => {
+      const mine = ++seq
+      api.labelStates(selectionId).then(
+        (states) => {
+          if (live && mine === seq) setLabelStates(states)
+        },
+        () => {
+          if (live && mine === seq) setLabelStates(null)
+        },
+      )
+    }
+    fetchStates()
+    const off = session.onGraphAdvance(fetchStates)
+    return () => {
+      live = false
+      off()
+    }
+  }, [labelsOpen, session, backend.session, selectionId])
+
+  const onToggleLabel = useCallback((body: SetLabelsBody) => session?.setLabels(body), [session])
+  const onPutLabelDefinitions = useCallback(
+    (definitions: LabelDefinitionInput[]) => session?.putLabelDefinitions(definitions),
+    [session],
+  )
+  const onRemoveLabelDefinition = useCallback(
+    (name: string) => session?.deleteLabelDefinition(name),
+    [session],
+  )
+
   const selection = selectionId === null ? null : (session?.tracks.cell(selectionId) ?? null)
   const canDeleteMask = selection !== null && selection.t === t
 
@@ -187,7 +244,7 @@ export function App() {
       jobs={jobs}
       display={status.display}
       awaitingFrame={status.awaitingFrame}
-      cursor={session?.readout.sample ?? null}
+      cursor={cursor}
       selection={selection}
       lineage={lineage}
       history={history}
@@ -207,6 +264,11 @@ export function App() {
       }
       onSaveTrackingSnapshot={onSaveTrackingSnapshot}
       canSaveTrackingSnapshot={hasGraph}
+      labelStates={labelStates}
+      onLabelsOpen={setLabelsOpen}
+      onToggleLabel={onToggleLabel}
+      onPutLabelDefinitions={onPutLabelDefinitions}
+      onRemoveLabelDefinition={onRemoveLabelDefinition}
       scene={<SceneCanvas session={session} />}
       onMenu={onMenu}
     />

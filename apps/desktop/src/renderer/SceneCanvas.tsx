@@ -151,17 +151,17 @@ export function SceneCanvas({ session }: { session: ViewerSession | null }) {
 
   const onHover = useCallback(
     (info: PickingInfo) => {
-      if (!session || is3d || !info.coordinate) return
+      if (!session) return
+      if (is3d || !info.coordinate) {
+        session.readout.clear()
+        return
+      }
       const [wx, wy] = info.coordinate
       const scale = useNav.getState().project?.scale ?? null
       const [, py, px] = fromWorld([wx ?? 0, wy ?? 0, 0], scale, axisScale)
-      session.readout.move([sliceIndex, py, px], {
-        t,
-        channel: activeChannel,
-        labels: overlays.labels.on,
-      })
+      session.readout.move([sliceIndex, py, px])
     },
-    [session, is3d, sliceIndex, t, activeChannel, overlays.labels.on, axisScale],
+    [session, is3d, sliceIndex, axisScale],
   )
 
   // A modifier click on a centroid jumps to XY; deck owns plain and modified double-click.

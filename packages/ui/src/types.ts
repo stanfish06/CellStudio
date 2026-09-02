@@ -3,14 +3,11 @@ import type { CSSProperties } from 'react'
 export type BackendState = 'starting' | 'ready' | 'down' | 'fatal'
 
 /** Pixel under the cursor, in dataset coordinates, never display-scaled. */
+/** The pointer's dataset position; the selection carries values, the hover only where. */
 export interface CursorSample {
   z: number
   y: number
   x: number
-  /** Active-channel intensity; null while the readout is in flight. */
-  value: number | null
-  labelId: number | null
-  trackId: number | null
 }
 
 export interface PerfSample {

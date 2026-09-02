@@ -42,7 +42,10 @@ fn f00_link_and_unlink_latency() {
             .expect("validate")
             .is_empty()
     );
-    project.db.materialize_staged().expect("materialize");
+    project
+        .db
+        .materialize_staged(&[], &Default::default())
+        .expect("materialize");
 
     // 10 cells at t=100 whose track also has a member at t=99: unlink each chain,
     // then re-link the exact (t=99 → t=100) pair the unlink just broke.

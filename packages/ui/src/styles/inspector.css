@@ -2,6 +2,7 @@
   grid-column: 2;
   grid-row: 1;
   min-width: 0;
+  min-height: 0;
   border-left: 1px solid var(--line);
   background: #2c2e31;
   display: grid;
@@ -328,4 +329,137 @@
   .inspector {
     display: none;
   }
+}
+
+/* Label chips on the selected cell and the label sheet. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.chip {
+  font: 10px var(--mono);
+  color: #e6edf3;
+  background: #414348;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 0 6px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.sheet-button {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #414348;
+  color: #f0f0f0;
+  font: 13px/1 var(--mono);
+  padding: 0;
+}
+
+.sheet-button:hover:not(:disabled) {
+  background: #505258;
+}
+
+.sheet-button.remove {
+  visibility: hidden;
+}
+
+.label-sheet-row:hover .sheet-button.remove,
+.sheet-button.remove:focus-visible {
+  visibility: visible;
+}
+
+.sheet-button.remove:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.label-sheet {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.label-sheet-row {
+  display: grid;
+  grid-template-columns: 14px 1fr auto 18px;
+  gap: 8px;
+  align-items: center;
+  height: 22px;
+  padding: 0 2px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  color: #d2dae2;
+}
+
+.label-sheet-name {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0 4px;
+  height: 18px;
+  border-radius: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.label-sheet-name:hover {
+  background: #414348;
+}
+
+.label-sheet-row.active .label-sheet-name {
+  background: #3a3a3a;
+  box-shadow: inset 2px 0 0 var(--label-color, var(--selection));
+}
+
+/* The native colour input, drawn as a 12 px swatch of the label's colour. */
+.label-swatch {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--label-color);
+  cursor: pointer;
+}
+
+.label-swatch::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.label-swatch::-webkit-color-swatch {
+  border: 0;
+  border-radius: 2px;
+}
+
+.label-sheet-uses {
+  font: 9px var(--mono);
+  color: var(--faint);
+}
+
+.label-sheet-add {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.label-sheet-add input {
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: #232528;
+  color: #e6edf3;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.label-sheet-error {
+  color: var(--danger);
+  font-size: 10px;
 }

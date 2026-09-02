@@ -4,7 +4,7 @@ use cellstudio_core::reader::Histogram;
 use cellstudio_db::queries::{CellRow, EditEntry, LineageTree, LinkRow, Versions};
 use serde::Serialize;
 
-use cellstudio_db::GraphCommit;
+use cellstudio_db::{GraphCommit, LabelDefinition, LabelState, TrackCoverage};
 
 use crate::edit::{EditOutcome, MaskCommit};
 
@@ -156,6 +156,59 @@ pub struct ProjectInfo {
     pub has_labels: bool,
     /// Any `links` row exists — a snapshot at open/refetch, like the version counters.
     pub has_graph: bool,
+    /// Stored definitions ∪ names on cells, with per-name use counts.
+    pub label_definitions: Vec<LabelDefinitionWire>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelDefinitionWire {
+    pub name: String,
+    pub uses: u64,
+    pub color: Option<String>,
+}
+
+impl From<&LabelDefinition> for LabelDefinitionWire {
+    fn from(def: &LabelDefinition) -> Self {
+        Self {
+            name: def.name.clone(),
+            uses: def.uses,
+            color: def.color.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelStateWire {
+    pub name: String,
+    pub cell: bool,
+    pub track: &'static str,
+}
+
+impl From<&LabelState> for LabelStateWire {
+    fn from(state: &LabelState) -> Self {
+        Self {
+            name: state.name.clone(),
+            cell: state.cell,
+            track: match state.track {
+                TrackCoverage::All => "all",
+                TrackCoverage::None => "none",
+                TrackCoverage::Some => "some",
+            },
+        }
+    }
+}
+
+/// `DELETE /project/label-definitions/{name}`: the strip edit when any cell carried the
+/// name, and the list afterwards.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelDefinitionsWire {
+    pub session_id: String,
+    pub definitions: Vec<LabelDefinitionWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edit: Option<EditResultWire>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,6 +224,8 @@ pub struct CellRowWire {
     pub track_id: Option<u32>,
     pub parent_id: Option<u32>,
     pub reviewed: bool,
+    pub labels: Vec<String>,
+    pub track_labels: Vec<String>,
 }
 
 impl From<&CellRow> for CellRowWire {
@@ -185,6 +240,8 @@ impl From<&CellRow> for CellRowWire {
             track_id: row.track_id,
             parent_id: row.parent_id,
             reviewed: row.reviewed,
+            labels: row.labels.clone(),
+            track_labels: row.track_labels.clone(),
         }
     }
 }

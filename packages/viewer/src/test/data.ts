@@ -5,12 +5,16 @@ import type {
   Dims,
   EditResult,
   GraphEditResult,
+  LabelDefinition,
+  LabelDefinitionInput,
+  LabelDefinitionsResult,
   LabelLease,
   LayerId,
   Level,
   MaskEditResult,
   PlaneBuffer,
   ProjectInfo,
+  SetLabelsBody,
   StrokeBody,
   VolumeBuffer,
 } from '@cellstudio/api-client'
@@ -77,6 +81,7 @@ export interface NavOverrides {
   pendingLink?: PendingLink | null
   tool?: Tool
   labels?: { on: boolean; opacity: number }
+  highlightLabels?: string[]
   tracks?: Partial<NavSnapshot['overlays']['tracks']>
 }
 
@@ -99,6 +104,7 @@ export function navSnapshot(project: ProjectInfo, o: NavOverrides = {}): NavSnap
     activeChannel: 0,
     overlays: {
       labels: o.labels ?? { on: true, opacity: 0.36 },
+      highlightLabels: o.highlightLabels ?? [],
       tracks: {
         on: true,
         opacity: 0.85,
@@ -138,6 +144,8 @@ export const cell = (
   trackId,
   parentId,
   reviewed: false,
+  labels: [],
+  trackLabels: [],
 })
 
 export const makePlane = (
@@ -215,10 +223,16 @@ export class FakeApi implements PixelApi, MaskApi, GraphApi {
   editAffectedTracks: number[] = []
   private lastGraphResult: GraphEditResult | null = null
 
-
   linkCalls: { parentId: number; childId: number }[] = []
   unlinkCalls: { cellId: number }[] = []
   cutCalls: { parentId: number; childId: number }[] = []
+  setLabelsCalls: SetLabelsBody[] = []
+  putDefinitionsCalls: string[][] = []
+  deleteDefinitionCalls: string[] = []
+  /** The list every definitions call answers with. */
+  definitions: LabelDefinition[] = []
+  /** When true, a delete also carries a strip edit over `editedCells`. */
+  deleteStrips = false
   /** When set, link/unlink reject with it — a 409's structured reason in tests. */
   graphError: unknown = null
   sessionId = 'session-1'
@@ -311,6 +325,28 @@ export class FakeApi implements PixelApi, MaskApi, GraphApi {
     this.cutCalls.push(body)
     if (this.graphError) return Promise.reject(this.graphError)
     return Promise.resolve(this.graphEditResult([body.parentId, body.childId]))
+  }
+
+  setLabels(body: SetLabelsBody): Promise<GraphEditResult> {
+    this.setLabelsCalls.push(body)
+    if (this.graphError) return Promise.reject(this.graphError)
+    return Promise.resolve(this.graphEditResult([]))
+  }
+
+  putLabelDefinitions(definitions: LabelDefinitionInput[]): Promise<LabelDefinitionsResult> {
+    this.putDefinitionsCalls.push(definitions.map((d) => d.name))
+    this.definitions = definitions.map((d) => ({ name: d.name, uses: 0, color: d.color ?? null }))
+    return Promise.resolve({ sessionId: this.sessionId, definitions: this.definitions })
+  }
+
+  deleteLabelDefinition(name: string): Promise<LabelDefinitionsResult> {
+    this.deleteDefinitionCalls.push(name)
+    this.definitions = this.definitions.filter((d) => d.name !== name)
+    return Promise.resolve({
+      sessionId: this.sessionId,
+      definitions: this.definitions,
+      ...(this.deleteStrips ? { edit: this.graphEditResult([]) } : {}),
+    })
   }
 
   private graphEditResult(affected: number[]): GraphEditResult {

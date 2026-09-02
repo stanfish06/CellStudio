@@ -123,6 +123,7 @@ export interface TrackPoint {
   color: Rgb
   current: boolean
   selected: boolean
+  highlighted: boolean
 }
 
 export interface TrackSegment {
@@ -146,7 +147,64 @@ export interface BuildTracksArgs {
   slab?: number
   /** Cell ids of the selected lineage, highlighted distinctly. */
   lineage?: ReadonlySet<number>
+  /** Cell id → the colour of the highlighted label it carries, on the current frame. */
+  highlighted?: ReadonlyMap<number, Rgb>
   fade?: TrackFade
+}
+
+export interface LabelHighlight {
+  name: string
+  color: Rgb
+}
+
+/**
+ * Cells on frame `t` carrying a highlighted label, keyed to the index of that label in
+ * `highlights` (the first match wins), plus the colour per index. Labels past `maxSlots`
+ * are ignored; the shader has that many highlight uniforms.
+ */
+export function highlightSlots(
+  cells: readonly CellRow[],
+  t: number,
+  highlights: readonly LabelHighlight[],
+  maxSlots: number,
+): { slots: ReadonlyMap<number, number>; colors: Rgb[]; signature: string } {
+  const used = highlights.slice(0, maxSlots)
+  const slots = new Map<number, number>()
+  if (used.length > 0) {
+    for (const cell of cells) {
+      if (cell.t !== t) continue
+      const k = used.findIndex(
+        (h) => cell.labels.includes(h.name) || cell.trackLabels.includes(h.name),
+      )
+      if (k >= 0) slots.set(cell.id, k)
+    }
+  }
+  const colors = used.map((h) => h.color)
+  const signature = `${colors.map((c) => c.join('.')).join('|')}#${[...slots]
+    .map(([id, k]) => `${id}:${k}`)
+    .join(',')}`
+  return { slots, colors, signature }
+}
+
+/**
+ * Cells on frame `t` carrying a highlighted label in either scope, keyed to that label's
+ * colour; the first listed highlight wins when a cell carries several.
+ */
+export function labeledCells(
+  cells: readonly CellRow[],
+  t: number,
+  highlights: readonly LabelHighlight[],
+): ReadonlyMap<number, Rgb> | undefined {
+  if (highlights.length === 0) return undefined
+  const out = new Map<number, Rgb>()
+  for (const cell of cells) {
+    if (cell.t !== t) continue
+    const hit = highlights.find(
+      (h) => cell.labels.includes(h.name) || cell.trackLabels.includes(h.name),
+    )
+    if (hit) out.set(cell.id, hit.color)
+  }
+  return out
 }
 
 export interface BuiltTracks {
@@ -173,7 +231,7 @@ const project = (
  * renders at exactly `fade.max` and the one ending at t − trail at exactly `fade.min`.
  */
 export function buildTracks(args: BuildTracksArgs): BuiltTracks {
-  const { cells, t, trail, transform, orientation, index, slab, lineage } = args
+  const { cells, t, trail, transform, orientation, index, slab, lineage, highlighted } = args
   const fade = args.fade ?? DEFAULT_TRACK_FADE
   const shown = shownTracks(trackSpans(cells), t)
   const windowed = inTrailWindow(cells, t, trail).filter((c) => shown.has(trackOf(c)))
@@ -186,14 +244,17 @@ export function buildTracks(args: BuildTracksArgs): BuiltTracks {
   for (const cell of visible) {
     if (cell.centroid === null) continue
     const trackId = trackOf(cell)
+    const selected = lineage?.has(cell.id) ?? false
+    const highlight = highlighted?.get(cell.id)
     points.push({
       cellId: cell.id,
       trackId,
       t: cell.t,
       position: project(transform.toWorld(cell.centroid), orientation),
-      color: lineage?.has(cell.id) ? SELECTED_COLOR : trackColor(trackId),
+      color: selected ? SELECTED_COLOR : (highlight ?? trackColor(trackId)),
       current: cell.t === t,
-      selected: lineage?.has(cell.id) ?? false,
+      selected,
+      highlighted: highlight !== undefined,
     })
   }
 
@@ -310,6 +371,7 @@ export interface TrackLayerProps {
   /** Centroid radius in image pixels; scales with the image, not the screen. */
   dotSize?: number
   lineage?: ReadonlySet<number>
+  highlighted?: ReadonlyMap<number, Rgb>
   lineageOverlay?: LineageOverlay
   trackOpacity?: number
   fade?: TrackFade
@@ -408,7 +470,7 @@ abstract class TrackOverlayLayer<
             Math.round(255 * opacity * (p.current ? 1 : 0.55)),
           ],
           getLineColor: (p: TrackPoint) => (p.selected ? SELECTED_COLOR : p.color),
-          getLineWidth: (p: TrackPoint) => (p.selected ? 2 : 0),
+          getLineWidth: (p: TrackPoint) => (p.selected ? 2 : p.highlighted ? 3 : 0),
           updateTriggers: { getFillColor: [opacity], getRadius: [built.points, dot] },
         }),
       ),
@@ -421,10 +483,32 @@ export class TrackLayer extends TrackOverlayLayer<TrackLayerProps> {
   static override layerName = 'TrackLayer'
 
   override renderLayers(): Layer[] {
-    const { cells, t, trail, transform, orientation, index, slab, lineage, lineageOverlay, fade } =
-      this.props
+    const {
+      cells,
+      t,
+      trail,
+      transform,
+      orientation,
+      index,
+      slab,
+      lineage,
+      highlighted,
+      lineageOverlay,
+      fade,
+    } = this.props
     const built = withLineageEdges(
-      buildTracks({ cells, t, trail, transform, orientation, index, slab, lineage, fade }),
+      buildTracks({
+        cells,
+        t,
+        trail,
+        transform,
+        orientation,
+        index,
+        slab,
+        lineage,
+        highlighted,
+        fade,
+      }),
       cells,
       { lineage: lineageOverlay, t, trail, transform, orientation, index, slab, fade },
     )
@@ -446,6 +530,7 @@ export interface TrackLayer3DProps {
   selectedLink?: { parent: number; child: number } | null
   transform: WorldTransform
   lineage?: ReadonlySet<number>
+  highlighted?: ReadonlyMap<number, Rgb>
   lineageOverlay?: LineageOverlay
   trackOpacity?: number
   fade?: TrackFade
@@ -458,9 +543,9 @@ export class TrackLayer3D extends TrackOverlayLayer<TrackLayer3DProps> {
   static override layerName = 'TrackLayer3D'
 
   override renderLayers(): Layer[] {
-    const { cells, t, trail, transform, lineage, lineageOverlay, fade } = this.props
+    const { cells, t, trail, transform, lineage, highlighted, lineageOverlay, fade } = this.props
     const built = withLineageEdges(
-      buildTracks({ cells, t, trail, transform, lineage, fade }),
+      buildTracks({ cells, t, trail, transform, lineage, highlighted, fade }),
       cells,
       { lineage: lineageOverlay, t, trail, transform, fade },
     )
