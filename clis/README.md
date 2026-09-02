@@ -1,6 +1,6 @@
 # CellStudio CLIs
 
-Standalone CLIs for automatic segmentation and tracking. 
+Standalone CLIs for automatic segmentation and tracking.
 
 ```
 clis/
@@ -39,25 +39,3 @@ io:
   output: { masks: masks.tif }    # named outputs
 options: ...                      # full mapping of the underlying API
 ```
-
-Segmenter input: most microscopy formats via [bioio](https://github.com/bioio-devs/bioio), nd2 (Nikon), czi (Zeiss), lif (Leica), dv (DeltaVision), png/jpg, ome-zarr, npy, a directory, or a glob pattern like `/data/*.ims` (files stacked on axis 0). Multiple segmenter inputs run as a batch: one mask file per input, named `<input-stem>_<masks-name>` (or `{stem}`/`{dir}` placeholders in the output path); the tracker instead stacks multi-file input on axis 0 (frames). Non-tiff reads report dims, channel names, and physical pixel sizes; `io.input.scene`/`io.input.channel` select from multi-scene/multi-channel files. The Bio-Formats long tail (ims, vsi, oir, oib) installs on demand: `cellstudio run` adds the segmenter's `bioformats` dependency-group when an exec config mentions one of those formats, and persists the choice in a `.bioformats` marker in the tool dir (standalone `uv run` users pass `--group bioformats` themselves). Output: label image, 0 = background. Tracker input: TYX/TZYX label stack. Output: `tracks.csv` (+ splits/merges for laptrack), plus masks relabeled by track id.
-
-First `exec` of cellpose / micro-sam / stardist downloads pretrained weights into the user cache. `exec` runs on CPU unless `--gpu` is passed (cellpose/micro-sam: torch device, stardist: tensorflow GPU visibility; laptrack and ultrack are CPU-only and say so). A `device` set in the config overrides the flag. Ultrack keeps its working database under `options.data.working_dir` (default `.ultrack/` in the cwd).
-
-## CPU vs CUDA torch
-
-Default installs get CPU torch wheels (`download.pytorch.org/whl/cpu`). Each torch-using tool has `cpu`/`gpu-cu126`/`gpu-cu130` dependency-groups (`default-groups = ["cpu"]`); the gpu groups pin torch to the matching cuda index (and in the segmenter also install tensorflow's pip cuda libraries, which stardist needs to see the GPU) — cu126 covers sm_70-sm_90 (V100 through H100, the default), cu130 is for Blackwell-era GPUs:
-
-```sh
-uv sync --no-group cpu --group gpu-cu126    # inside clis/<tool>, or --project clis/<tool>
-```
-
-`cellstudio run` picks the group per tool, the same one for every command (`list`/`init`/`exec`) so the env is never re-synced back and forth. Resolution order: `CELLSTUDIO_TORCH` (`cpu`/`gpu`/`cu126`/`cu130`) if set, else a top-level `cuda:` key in the exec config yaml, else the `.torch-gpu` marker in the tool dir, else NVIDIA detection (`nvidia-smi` must run successfully; the binary alone can exist on GPU-less login nodes). A cuda decision writes the chosen variant into the marker, so on a shared filesystem login nodes without a GPU keep dispatching the same env after the first GPU-node run; delete the marker (or set `CELLSTUDIO_TORCH=cpu`) to go back. The `exec --gpu` flag only controls runtime device use. Standalone `uv run` users pass the group flags themselves (plain `uv run` re-syncs back to the cpu group).
-
-## Adding an algorithm
-
-Create `src/<tool>/tools/<name>/` with `config.py` (pydantic models: IO paths + full options mapping), `io.py` (load input / save output), `runner.py` (`run(cfg) -> dict`, heavy imports inside), then register it in `src/<tool>/registry.py`. `list`/`init`/`exec` come from `cli_core.app`.
-
-## Adding a tool
-
-Copy the layout of `segmenter/`: a uv project whose `pyproject.toml` exposes a console script named after the directory, depending on `cellstudio-cli-core` (path source). `cellstudio tool list` discovers it automatically.
