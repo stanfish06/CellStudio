@@ -362,6 +362,7 @@ export class VolumeScene {
       .catch(() => {
         this.pendingToken = null
         this.perf?.cancel(token)
+        this.changed.emit()
       })
     this.volumes.prefetch(nav.t + this.tDirection)
     if (labelCache) labelCache.prefetch(nav.t + this.tDirection)
@@ -428,10 +429,11 @@ export class VolumeScene {
       : null
   }
 
+  /** The HUD readout, plus whether the volume, its mask or the track window is still in flight. */
   status(): SceneStatus {
     return {
       display: { level: this.level, zoom: this.viewState().zoom },
-      awaitingFrame: this.pendingToken !== null,
+      awaitingFrame: this.pendingToken !== null || (this.tracksSource?.pending ?? false),
     }
   }
 

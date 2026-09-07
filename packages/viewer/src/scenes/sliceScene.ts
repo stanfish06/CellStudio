@@ -41,6 +41,7 @@ import {
   type TrackPoint,
   type TrackSegment,
   labeledCells,
+  trackOf,
 } from '../layers/tracks'
 import { vivLayer } from '../layers/viv'
 import type { PerfMonitor } from '../perf'
@@ -153,8 +154,8 @@ export class SliceScene {
   private committed: Committed | null = null
   private latest = new LatestWins()
   private pendingToken: string | null = null
-  /** The frame viv finished painting; the ortho views read theirs off `committed`. */
-  private xyPresentedT: number | null = null
+  /** The XY frame viv finished painting; the ortho views read theirs off `committed`. */
+  private xyPresented: { key: string; t: number } | null = null
   /** The newest frame whose image — and mask, when that overlay is on — is on screen. */
   private shownT: number | null = null
   private lastIndex: number | null = null
@@ -196,6 +197,9 @@ export class SliceScene {
   /** XY only: viv pixel sources over the raw `/store` passthrough. */
   setPyramid(pyramid: XyPyramid | null): void {
     this.pyramid = pyramid
+    // a new loader reloads every tile, so what the old one presented no longer counts
+    this.xyPresented = null
+    if (this.nav) this.requestXy(this.nav)
     this.changed.emit()
   }
 
@@ -286,8 +290,12 @@ export class SliceScene {
       this.tracksSource?.ensure(nav.t, nav.overlays.tracks.trail, project.versions.graph)
     }
 
-    if (this.orientation === 'xy') this.warmXyBrick(nav, project.dims)
-    else this.requestPlane(nav)
+    if (this.orientation === 'xy') {
+      this.requestXy(nav)
+      this.warmXyBrick(nav, project.dims)
+    } else {
+      this.requestPlane(nav)
+    }
     this.requestLabelPlane(nav)
   }
 
@@ -316,7 +324,11 @@ export class SliceScene {
     return { target: [camera.target[0], camera.target[1], 0], zoom: camera.zoom }
   }
 
-  /** What the stage HUD reports, plus whether the current nav key is still in flight. */
+  /**
+   * What the stage HUD reports, plus whether the current nav key is still in flight: the
+   * image, the mask plane while the overlay is on (it is held off screen until both match
+   * the same frame), and the track window the overlay draws from.
+   */
   status(): SceneStatus {
     const nav = this.nav
     const zoom = this.viewState().zoom
@@ -324,12 +336,19 @@ export class SliceScene {
       this.orientation === 'xy'
         ? levelForZoom(zoom, nav?.project?.levels ?? [])
         : (this.committed?.key.level ?? levelForZoom(zoom, nav?.project?.levels ?? []))
-    return { display: { level, zoom }, awaitingFrame: this.pendingToken !== null }
+    const maskOwed = nav !== null && this.labelPending !== null && this.labelKey(nav) !== null
+    const tracksOwed = this.tracksSource?.pending ?? false
+    return {
+      display: { level, zoom },
+      awaitingFrame: this.pendingToken !== null || maskOwed || tracksOwed,
+    }
   }
 
   /** The frame the image on screen belongs to, or null while that is unknown. */
   private imageT(): number | null {
-    return this.orientation === 'xy' ? this.xyPresentedT : (this.committed?.key.t ?? null)
+    return this.orientation === 'xy'
+      ? (this.xyPresented?.t ?? null)
+      : (this.committed?.key.t ?? null)
   }
 
   /**
@@ -420,7 +439,7 @@ export class SliceScene {
     this.labelPending = null
     this.pointer = null
     this.pendingToken = null
-    this.xyPresentedT = null
+    this.xyPresented = null
     this.shownT = null
     this.pyramid = null
     this.lineage = null
@@ -490,6 +509,7 @@ export class SliceScene {
       .catch(() => {
         this.pendingToken = null
         this.perf?.cancel(token)
+        this.changed.emit()
       })
     const axis = key.axis === 'xz' ? 'y' : 'x'
     this.planes.prefetch(key, this.direction, project.dims[axis] - 1)
@@ -521,7 +541,11 @@ export class SliceScene {
     const project = nav.project
     if (!key || !project) return
     const token = planeKeyId(key)
-    if (this.labelCommitted?.token === token || this.labelPending === token) return
+    if (this.labelCommitted?.token === token) {
+      this.labelPending = null
+      return
+    }
+    if (this.labelPending === token) return
     this.labelPending = token
     void this.labelLatest
       .run(token, (signal) => this.planes.get(key, signal))
@@ -533,6 +557,7 @@ export class SliceScene {
       })
       .catch(() => {
         this.labelPending = null
+        this.changed.emit()
       })
     const axis = sliceAxis(this.orientation)
     const dims = levelDims(project.levels, key.level, project.dims)
@@ -674,14 +699,24 @@ export class SliceScene {
     }) as unknown as Layer
   }
 
-  /** Latest-wins, so a burst of clicks resolves what the last one pointed at. */
+  /**
+   * A voxel under a queued or in-flight stroke answers from the editor's log, so a mask is
+   * selectable the moment it is drawn; anything else is latest-wins through `/pixel`, so
+   * a burst of clicks resolves what the last one pointed at.
+   */
   private pickLabel(info: PickingInfo, onHit: (cellId: number) => void): void {
     const nav = this.nav
     const api = this.api
     const coordinate = info.coordinate
-    if (!nav || !coordinate || !api || !this.editor?.labelsPresent) return
+    if (!nav || !coordinate || !api || !this.editor) return
     const px = this.pixelAt([coordinate[0] ?? 0, coordinate[1] ?? 0])
     const [z, y, x] = [Math.floor(px[0]), Math.floor(px[1]), Math.floor(px[2])]
+    const local = this.editor.labelAt(nav.t, [z, y, x])
+    if (local !== null) {
+      if (local) onHit(local)
+      return
+    }
+    if (!this.editor.labelsPresent) return
     const token = `${nav.t}/${z}/${y}/${x}`
     void this.labelPick
       .run(token, (signal) => api.pixel({ layer: 'labels', t: nav.t, c: 0, z, y, x }, signal))
@@ -689,6 +724,30 @@ export class SliceScene {
         if (id) onHit(id)
       })
       .catch(() => {})
+  }
+
+  /**
+   * What viv reloads tiles for: the frame, plane and channel set. Nav's `generation` is
+   * left out — a jump onto the frame already on screen triggers no tile load, so nothing
+   * would ever clear a token that carried it.
+   */
+  private xyKey(nav: NavSnapshot): string | null {
+    if (!this.pyramid || !nav.project) return null
+    const channels = visibleChannels(nav.channels).map((c) => c.index)
+    if (channels.length === 0) return null
+    return `xy/${nav.t}/${nav.slices.xy.index}/${channels.join(',')}`
+  }
+
+  /** Owes the frame until viv's `onViewportLoad` reports its tiles on screen. */
+  private requestXy(nav: NavSnapshot): void {
+    const key = this.xyKey(nav)
+    if (key === null || this.xyPresented?.key === key) {
+      this.pendingToken = null
+      return
+    }
+    if (this.pendingToken === key) return
+    this.pendingToken = key
+    this.perf?.begin('xy-step', key)
   }
 
   /**
@@ -719,8 +778,8 @@ export class SliceScene {
     const visible = visibleChannels(nav.channels)
     if (visible.length === 0) return null
     const t = nav.t
-    const token = `xy/${t}/${nav.slices.xy.index}#${nav.generation}`
-    this.perf?.begin('xy-step', token)
+    const key = this.xyKey(nav)
+    if (key === null) return null
     return vivLayer(MultiscaleImageLayer, {
       id: `${this.id}-image`,
       loader: pyramid.levels,
@@ -739,8 +798,11 @@ export class SliceScene {
       // What the volume left over, so a slice <-> 3D switch does not thrash.
       maxCacheSize: this.budget.tileCacheSize(pyramid.tileSize, visible.length),
       onViewportLoad: () => {
-        this.perf?.presented(token)
-        this.xyPresentedT = t
+        // a late load for a frame nav has already left must not look like the current one
+        if (this.nav && this.xyKey(this.nav) !== key) return
+        this.perf?.presented(key)
+        this.xyPresented = { key, t }
+        if (this.pendingToken === key) this.pendingToken = null
         this.changed.emit()
       },
     })
@@ -791,8 +853,10 @@ export class SliceScene {
 }
 
 /**
- * The highlight the track layers get for the selection: the whole lineage once the
- * overlay for this exact focus has landed, the selected cell alone until then.
+ * The highlight the track layers get for the selection: the selected cell's history plus
+ * the rest of its own track once the overlay for this exact focus has landed, the selected
+ * cell alone until then. The forward part is what keeps the track lit while stepping past
+ * the selected frame; the selection itself never moves.
  */
 export function lineageHighlight(
   lineage: LineageOverlay | null,
@@ -816,6 +880,28 @@ export function lineageHighlight(
     links.push({ parent, child: cursor })
     path.add(parent)
     cursor = parent
+  }
+  // Forward along the same track only: a track is the chain up to the next division, so
+  // the daughters (fresh track ids) stay unlit and the choice at a split is never guessed.
+  const byId = new Map(lineage.cells.map((c) => [c.id, c]))
+  const childrenOf = new Map<number, number[]>()
+  for (const l of lineage.links) {
+    const list = childrenOf.get(l.parent)
+    if (list) list.push(l.child)
+    else childrenOf.set(l.parent, [l.child])
+  }
+  let head = selectedId
+  for (;;) {
+    const here = byId.get(head)
+    if (!here) break
+    const next = (childrenOf.get(head) ?? []).find((id) => {
+      const child = byId.get(id)
+      return child !== undefined && trackOf(child) === trackOf(here) && !path.has(id)
+    })
+    if (next === undefined) break
+    links.push({ parent: head, child: next })
+    path.add(next)
+    head = next
   }
   return {
     set: path,

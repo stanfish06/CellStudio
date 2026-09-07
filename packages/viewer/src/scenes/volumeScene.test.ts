@@ -10,6 +10,7 @@ import { MaskEditor } from '../edit/maskEditor'
 import { PerfMonitor } from '../perf'
 import {
   FakeApi,
+  HeldApi,
   cell,
   devProject,
   layerProps,
@@ -177,6 +178,22 @@ describe('VolumeScene', () => {
     expect(scene.cameraFrom({ ...scene.viewState(), zoom: NaN })).toMatchObject({ zoom: -1.5 })
     const degenerate = scene.cameraFrom({ target: [0, Infinity, 0], zoom: 0 })
     expect(degenerate.target[1]).toBeCloseTo(300, 9)
+  })
+
+  it('owes the frame while the track window for it is still loading', async () => {
+    const api = new HeldApi()
+    api.cells = [cell(11, 3, [1, 100, 200], 7)]
+    const scene = new VolumeScene({
+      volumes: new VolumeCache({ api }),
+      tracks: new TrackSource(api),
+    })
+    scene.update(navSnapshot(project, { activeView: '3d', t: 3 }))
+    await settle()
+    expect(scene.volume?.t).toBe(3)
+    expect(scene.status().awaitingFrame).toBe(true)
+    api.settle()
+    await settle()
+    expect(scene.status().awaitingFrame).toBe(false)
   })
 
   it('selects on a centroid pick and jumps on a modifier click', async () => {

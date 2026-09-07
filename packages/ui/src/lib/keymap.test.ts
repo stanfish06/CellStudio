@@ -4,6 +4,7 @@ import {
   LARGE_STEP,
   RESET_VIEW_KEY,
   SHORTCUTS,
+  TOGGLE_OVERLAY_KEYS,
   TOOL_KEYS,
   UNLINK_KEY,
   isPaintTool,
@@ -94,6 +95,19 @@ describe('resolveKey', () => {
     expect(resolveKey({ key: 'r' })).toEqual({ kind: 'resetView' })
     expect(resolveKey({ key: 'R' })).toEqual({ kind: 'resetView' })
     expect(resolveKey({ key: 'R', shiftKey: true })).toEqual({ kind: 'resetView' })
+  })
+
+  it('toggles the segmentation and track overlays on S and T, either case', () => {
+    expect(TOGGLE_OVERLAY_KEYS).toEqual({ labels: 'S', tracks: 'T' })
+    expect(resolveKey({ key: 's' })).toEqual({ kind: 'toggleOverlay', overlay: 'labels' })
+    expect(resolveKey({ key: 'S' })).toEqual({ kind: 'toggleOverlay', overlay: 'labels' })
+    expect(resolveKey({ key: 't' })).toEqual({ kind: 'toggleOverlay', overlay: 'tracks' })
+    expect(resolveKey({ key: 'T', shiftKey: true })).toEqual({
+      kind: 'toggleOverlay',
+      overlay: 'tracks',
+    })
+    expect(resolveKey({ key: 's', metaKey: true })).toBeNull()
+    expect(resolveKey({ key: 't', ctrlKey: true })).toBeNull()
   })
 
   it('leaves a modified reset key to the menus', () => {

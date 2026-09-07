@@ -190,6 +190,38 @@ fn the_cors_preflight_allows_the_session_header_a_mutation_sends() {
     );
 }
 
+/// Deleting a label definition is the one DELETE route. The browser preflights it like any
+/// other mutation and drops it as "Failed to fetch" unless DELETE is in the allowed methods.
+#[test]
+fn the_cors_preflight_allows_the_delete_a_label_definition_removal_sends() {
+    let server = Server::without_proxy();
+    let response = server
+        .client()
+        .request(
+            Method::OPTIONS,
+            server.url("/project/label-definitions/verified"),
+        )
+        .header(ORIGIN, "http://localhost:5173")
+        .header("access-control-request-method", "DELETE")
+        .header(
+            "access-control-request-headers",
+            "authorization,x-cellstudio-session",
+        )
+        .send()
+        .expect("preflight");
+    assert!(response.status().is_success(), "{}", response.status());
+    let allowed = response
+        .headers()
+        .get(ACCESS_CONTROL_ALLOW_METHODS)
+        .and_then(|value| value.to_str().ok())
+        .expect("preflight is missing access-control-allow-methods")
+        .to_ascii_lowercase();
+    assert!(
+        allowed.contains("delete"),
+        "removing a label from the sheet is blocked in a browser without this: {allowed}"
+    );
+}
+
 /// A browser hides every response header the server does not expose, so the binary
 /// contract dies silently without these. They ride on the real response, not the preflight.
 #[test]

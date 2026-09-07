@@ -52,6 +52,10 @@ export function voxelSet(runs: VoxelRun[]): VoxelSet {
   return { runs: merged }
 }
 
+export function containsVoxel(set: VoxelSet, [z, y, x]: PixelZYX): boolean {
+  return set.runs.some((r) => r.z === z && r.y === y && r.x0 <= x && x <= r.x1)
+}
+
 export function voxelCount(set: VoxelSet): number {
   let total = 0
   for (const run of set.runs) total += run.x1 - run.x0 + 1

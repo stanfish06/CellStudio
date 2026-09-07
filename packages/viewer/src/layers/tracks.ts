@@ -73,7 +73,8 @@ export interface TrackSpan {
   parent: number | null
 }
 
-const trackOf = (c: CellRow): number => c.trackId ?? c.id
+/** A row's track: the server's chain id, or its own id before tracking exists. */
+export const trackOf = (c: CellRow): number => c.trackId ?? c.id
 
 /** Every loaded row counts, future frames included: a gap at `t` must not end a track. */
 export function trackSpans(cells: readonly CellRow[]): Map<number, TrackSpan> {

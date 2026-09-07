@@ -11,9 +11,11 @@ import { trackColor } from '../layers/tracks'
 import { PerfMonitor } from '../perf'
 import {
   FakeApi,
+  HeldApi,
   cell,
   devProject,
   layerProps,
+  makeLabelPlane,
   makePlane,
   navSnapshot,
   type SliceCall,
@@ -83,6 +85,23 @@ describe('SliceScene ortho path', () => {
     expect(scene.status().awaitingFrame).toBe(false)
     scene.update(navSnapshot(project, { activeView: 'xz' }))
     expect(scene.status().awaitingFrame).toBe(true)
+  })
+
+  it('owes the frame while the track window for it is still loading', async () => {
+    const api = new HeldApi()
+    api.cells = [cell(11, 0, [1, 100, 200], 7)]
+    const scene = new SliceScene({
+      orientation: 'xz',
+      planes: new PlaneCache({ api }),
+      tracks: new TrackSource(api),
+    })
+    scene.update(navSnapshot(project, { activeView: 'xz', labels: { on: false, opacity: 0 } }))
+    await settle()
+    expect(scene.plane).not.toBeNull()
+    expect(scene.status().awaitingFrame).toBe(true)
+    api.settle()
+    await settle()
+    expect(scene.status().awaitingFrame).toBe(false)
   })
 
   it('does not refetch when nav has not moved', async () => {
@@ -227,6 +246,85 @@ describe('SliceScene XY path', () => {
     expect(layer.contrastLimits).toEqual([channels[0]?.window, channels[1]?.window])
     expect(layer.maxCacheSize).toBeGreaterThan(0)
   })
+
+  const pyramid = () => ({
+    levels: [
+      { getTile: vi.fn().mockResolvedValue(null), tileSize: 1024, dtype: 'Uint16' },
+    ] as never,
+    tileSize: 1024,
+    dtype: 'Uint16' as const,
+    labels: ['t', 'c', 'z', 'y', 'x'] as never,
+    width: 1024,
+    height: 1024,
+  })
+  const present = (scene: SliceScene) =>
+    (layerProps(scene.layers()[0]).onViewportLoad as () => void)()
+
+  it('owes the XY frame until viv presents it, so playback waits for the pixels', () => {
+    const { planes } = setup()
+    const scene = new SliceScene({ orientation: 'xy', planes })
+    scene.setPyramid(pyramid())
+    scene.update(navSnapshot(project, { t: 3, labels: { on: false, opacity: 0 } }))
+    expect(scene.status().awaitingFrame).toBe(true)
+    present(scene)
+    expect(scene.status().awaitingFrame).toBe(false)
+
+    // the same nav again owes nothing
+    scene.update(navSnapshot(project, { t: 3, labels: { on: false, opacity: 0 } }))
+    expect(scene.status().awaitingFrame).toBe(false)
+
+    // a t-step owes the next frame; a z-step does too
+    scene.update(navSnapshot(project, { t: 4, generation: 2, labels: { on: false, opacity: 0 } }))
+    expect(scene.status().awaitingFrame).toBe(true)
+    present(scene)
+    scene.update(
+      navSnapshot(project, {
+        t: 4,
+        index: { xy: 0 },
+        generation: 3,
+        labels: { on: false, opacity: 0 },
+      }),
+    )
+    expect(scene.status().awaitingFrame).toBe(true)
+  })
+
+  it('ignores a late present for a frame nav has already left', () => {
+    const { planes } = setup()
+    const scene = new SliceScene({ orientation: 'xy', planes })
+    scene.setPyramid(pyramid())
+    scene.update(navSnapshot(project, { t: 3, labels: { on: false, opacity: 0 } }))
+    const late = layerProps(scene.layers()[0]).onViewportLoad as () => void
+    scene.update(navSnapshot(project, { t: 4, generation: 2, labels: { on: false, opacity: 0 } }))
+    late()
+    expect(scene.status().awaitingFrame).toBe(true)
+  })
+
+  it('owes nothing without a pyramid or a visible channel', () => {
+    const { planes } = setup()
+    const scene = new SliceScene({ orientation: 'xy', planes })
+    scene.update(navSnapshot(project, { labels: { on: false, opacity: 0 } }))
+    expect(scene.status().awaitingFrame).toBe(false)
+    scene.setPyramid(pyramid())
+    expect(scene.status().awaitingFrame).toBe(true)
+    const hidden = navSnapshot(project).channels.map((c) => ({ ...c, visible: false }))
+    scene.update(
+      navSnapshot(project, { channels: hidden, generation: 2, labels: { on: false, opacity: 0 } }),
+    )
+    expect(scene.status().awaitingFrame).toBe(false)
+  })
+
+  it('keeps owing the frame until the mask plane for it lands when the overlay is on', async () => {
+    const { api, planes } = setup(false)
+    const scene = new SliceScene({ orientation: 'xy', planes, editor: labelEditor(api, true) })
+    scene.setPyramid(pyramid())
+    scene.update(navSnapshot(project, { t: 3, index: { xy: 1 } }))
+    present(scene)
+    expect(scene.status().awaitingFrame).toBe(true)
+    const at = labelCalls(api).findIndex((c) => c.q.t === 3)
+    api.settleSlice(api.sliceCalls.indexOf(labelCalls(api)[at]!), makeLabelPlane(1024, 1024))
+    await settle()
+    expect(scene.status().awaitingFrame).toBe(false)
+  })
 })
 
 describe('SliceScene track overlay', () => {
@@ -339,6 +437,42 @@ describe('SliceScene label overlay', () => {
     await settle()
     expect(selected).toEqual([42])
     expect(api.pixelCalls[0]).toMatchObject({ layer: 'labels', t: 0, c: 0, z: 1, y: 200, x: 100 })
+  })
+
+  it('picks a label a queued stroke painted before the server holds it', async () => {
+    // writes are held: the server still answers 0 where the stroke just went down
+    const { api, planes } = setup(false)
+    api.labelValue = 0
+    const first = api.nextLabelId
+    const editor = labelEditor(api, true)
+    editor.ensureLease()
+    await settle()
+    const selected: number[] = []
+    const scene = new SliceScene({
+      orientation: 'xy',
+      planes,
+      api,
+      editor,
+      onSelectLabel: (id) => selected.push(id),
+    })
+    scene.update(navSnapshot(project, { index: { xy: 1 } }))
+    editor.begin({
+      t: 0,
+      tool: 'brush',
+      radius: 8,
+      plane: { axis: 'z', index: 1 },
+      centre: [1, 200, 100],
+      selection: null,
+    })
+    editor.end()
+    expect(editor.pendingWrites).toBe(1)
+    scene.handlePick({ coordinate: [100, 200] } as unknown as PickingInfo)
+    await settle()
+    expect(selected).toEqual([first])
+    expect(api.pixelCalls).toHaveLength(0)
+    // a voxel outside the stroke still goes to the server
+    scene.handlePick({ coordinate: [600, 600] } as unknown as PickingInfo)
+    expect(api.pixelCalls).toHaveLength(1)
   })
 
   it('draws the brush cursor and resizes it with no request', async () => {
@@ -585,6 +719,34 @@ describe('SliceScene track-colored labels.', () => {
       { parent: 1, child: 2 },
     ])
     expect(overlay?.cells.map((c) => c.id)).toEqual([1, 2, 4])
+  })
+
+  it('follows the selected track forward to the next division, not into the daughters', () => {
+    // track 1 runs 1 → 2 → 3, then 3 divides into 4 and 5. Selecting 2 lights 1, 2, 3.
+    const lineage = {
+      graphVersion: 1,
+      focusCellId: 2,
+      cells: [
+        cell(1, 0, [1, 1, 1], 1),
+        cell(2, 1, [1, 2, 2], 1),
+        cell(3, 2, [1, 3, 3], 1),
+        cell(4, 3, [1, 4, 4], 4),
+        cell(5, 3, [1, 5, 5], 5),
+      ],
+      links: [
+        { parent: 1, child: 2 },
+        { parent: 2, child: 3 },
+        { parent: 3, child: 4 },
+        { parent: 3, child: 5 },
+      ],
+    }
+    const { set, overlay } = lineageHighlight(lineage, 2)
+    expect([...(set ?? [])].sort((a, b) => a - b)).toEqual([1, 2, 3])
+    expect(overlay?.links).toEqual([
+      { parent: 1, child: 2 },
+      { parent: 2, child: 3 },
+    ])
+    expect(overlay?.cells.map((c) => c.id)).toEqual([1, 2, 3])
   })
 
   it('falls back to the selected cell alone until its lineage lands', () => {

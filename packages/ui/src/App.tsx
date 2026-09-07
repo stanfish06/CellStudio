@@ -216,6 +216,11 @@ export function App({
           // Only the 3D view shows the pose the key would clear.
           if (nav.activeView === '3d') nav.resetVolumeCamera()
           break
+        case 'toggleOverlay': {
+          const current = nav.overlays[action.overlay]
+          nav.setOverlays({ [action.overlay]: { ...current, on: !current.on } })
+          break
+        }
         case 'shortcuts':
           setShortcutsOpen(true)
           break

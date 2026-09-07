@@ -241,7 +241,10 @@ export class ViewerSession {
   /**
    * One path for both arrivals of a commit: the mask response and the WS invalidate.
    * Idempotent by version, so whichever lands first does the work and the second returns
-   * — response-then-event and event-then-response both produce one fetch.   */
+   * — response-then-event and event-then-response both produce one fetch. The rows are
+   * the exception: the event carries none and usually lands first, so a response at the
+   * already-applied version still patches them in.
+   */
   advanceLabels(
     sessionId: string,
     version: number,
@@ -249,12 +252,13 @@ export class ViewerSession {
     removed: readonly number[] = [],
   ): boolean {
     if (this.lastSession !== null && sessionId !== this.lastSession) return false
-    if (version <= this.labelsApplied) return false
+    if (version < this.labelsApplied) return false
+    this.tracks.patch(cells, removed)
+    if (version === this.labelsApplied) return false
     this.labelsApplied = version
     this.navActions.setLabelsVersion?.(version)
     this.planes.invalidate('labels', version)
     this.labelVolumes.invalidate('labels', version)
-    this.tracks.patch(cells, removed)
     const nav = this.nav
     if (nav?.project) {
       // The refetch happens now rather than on the next nav write.
@@ -277,13 +281,15 @@ export class ViewerSession {
    * reruns now.   */
   advanceGraph(sessionId: string, graphVersion: number, affected: GraphAffected = {}): boolean {
     if (this.lastSession !== null && sessionId !== this.lastSession) return false
-    if (graphVersion <= this.graphApplied) return false
+    if (graphVersion < this.graphApplied) return false
+    // Committed rows draw immediately; the window stays stale until the versioned refetch.
+    // They land even when the row-less event for this version got here first.
+    if (affected.cells?.length) this.tracks.patch(affected.cells, [])
+    if (graphVersion === this.graphApplied) return false
     this.graphApplied = graphVersion
     this.navActions.setGraphVersion?.(graphVersion)
     this.tracks.setGraphVersion(graphVersion)
     this.remaps.clear()
-    // Committed rows draw immediately; the window stays stale until the versioned refetch.
-    if (affected.cells?.length) this.tracks.patch(affected.cells, [])
     for (const cb of this.graphListeners) cb(graphVersion, affected)
     const nav = this.nav
     if (nav?.project) {
@@ -317,8 +323,8 @@ export class ViewerSession {
   /**
    * An armed link's completing click The pendingLink is validated against
    * the live session and graph version; a same-or-earlier-frame target and a server
-   * rejection surface their reason without disarming, success disarms and reverts the
-   * tool through `NavActions.completeLink`.
+   * rejection surface their reason without disarming, success disarms, reverts the
+   * tool through `NavActions.completeLink` and selects the child.
    */
   completePendingLink(childId: number): void {
     const nav = this.nav
@@ -346,6 +352,8 @@ export class ViewerSession {
       .call(this.graphApi, { parentId: pending.parentId, childId })
       .then((result) => {
         this.navActions.completeLink?.()
+        // the focus moves onto the child so the next link arms from it
+        this.navActions.select(childId)
         this.dispatchEdit(result)
       })
       .catch((error) => this.onEditError?.(rejectionReason(error)))

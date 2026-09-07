@@ -42,6 +42,13 @@ export const LARGE_STEP = 10
 /** Returns the 3D camera to the fit pose; case-insensitively. */
 export const RESET_VIEW_KEY = 'R'
 
+/** Flip an overlay's `on` flag; the same switches the channel bar shows. */
+export const TOGGLE_OVERLAY_KEYS: Record<ToggleableOverlay, string> = {
+  labels: 'S',
+  tracks: 'T',
+}
+export type ToggleableOverlay = 'labels' | 'tracks'
+
 export type KeyAction =
   | { kind: 'view'; view: ActiveView }
   | { kind: 'stepT'; delta: number }
@@ -55,6 +62,7 @@ export type KeyAction =
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'resetView' }
+  | { kind: 'toggleOverlay'; overlay: ToggleableOverlay }
   | { kind: 'shortcuts' }
   | { kind: 'dismiss' }
 
@@ -68,6 +76,13 @@ export interface KeyLike {
 
 const TOOL_BY_KEY = new Map<string, Tool>(
   (Object.entries(TOOL_KEYS) as [Tool, string][]).map(([tool, key]) => [key, tool]),
+)
+
+const OVERLAY_BY_KEY = new Map<string, ToggleableOverlay>(
+  (Object.entries(TOGGLE_OVERLAY_KEYS) as [ToggleableOverlay, string][]).map(([overlay, key]) => [
+    key,
+    overlay,
+  ]),
 )
 
 export function isToolEnabled(tool: Tool): boolean {
@@ -124,6 +139,8 @@ export function resolveKey(e: KeyLike): KeyAction | null {
   if (letter === UNLINK_KEY) return { kind: 'unlink' }
   if (letter === ASSIGN_LABELS_KEY) return { kind: 'assignLabels' }
   if (letter === UNASSIGN_LABELS_KEY) return { kind: 'unassignLabels' }
+  const overlay = OVERLAY_BY_KEY.get(letter)
+  if (overlay) return { kind: 'toggleOverlay', overlay }
   const tool = TOOL_BY_KEY.get(letter)
   return tool ? { kind: 'tool', tool } : null
 }
@@ -146,6 +163,10 @@ export const SHORTCUTS: readonly ShortcutRow[] = [
   { action: 'Previous / next slice', keys: '[ ]' },
   { action: `Large step (${LARGE_STEP}×)`, keys: 'Shift' },
   { action: 'Reset 3D view', keys: RESET_VIEW_KEY },
+  {
+    action: 'Toggle segmentation / tracks overlay',
+    keys: `${TOGGLE_OVERLAY_KEYS.labels} / ${TOGGLE_OVERLAY_KEYS.tracks}`,
+  },
   { action: 'Pointer / pan', keys: `${TOOL_KEYS.pointer} / ${TOOL_KEYS.pan}` },
   { action: 'Brush / eraser', keys: `${TOOL_KEYS.brush} / ${TOOL_KEYS.eraser}` },
   { action: 'Link (arms on the selected cell)', keys: TOOL_KEYS.link },

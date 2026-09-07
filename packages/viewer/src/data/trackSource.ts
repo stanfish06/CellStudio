@@ -48,6 +48,11 @@ export class TrackSource {
     return this.rev
   }
 
+  /** A window read is in flight: the rows on hand may not cover the frame nav is on. */
+  get pending(): boolean {
+    return this.inflight !== null
+  }
+
   /** A cell id is a label voxel value; null when it is outside the loaded window. */
   cell(cellId: number): CellRow | null {
     return this.byId.get(cellId) ?? null
@@ -112,10 +117,16 @@ export class TrackSource {
         this.loaded = { t0, t1 }
         this.stale = false
         this.rev += 1
+        // clear before notifying: listeners read `pending` to decide whether a frame is owed
+        if (this.inflight === pending) this.inflight = null
         for (const cb of this.listeners) cb()
       })
-      .catch(() => {})
       // identity, not the key: a superseded read must not clear its replacement's mark
+      .catch(() => {
+        if (this.inflight !== pending) return
+        this.inflight = null
+        for (const cb of this.listeners) cb()
+      })
       .finally(() => {
         if (this.inflight === pending) this.inflight = null
       })

@@ -13,6 +13,7 @@ import type { PixelZYX } from '../data/world'
 import { Emitter } from '../scenes/types'
 import {
   AXIS_SLOT,
+  containsVoxel,
   downsample,
   stampRadii,
   stampVoxels,
@@ -252,7 +253,8 @@ export class MaskEditor {
     this.stamp(op, centre)
     this.changed.emit()
     if (op.stamps.length >= MAX_STROKE_STAMPS) {
-      const next: StrokeStart = {        t: op.t,
+      const next: StrokeStart = {
+        t: op.t,
         tool: op.mode === 'erase' ? 'eraser' : 'brush',
         radius: op.radius,
         plane: op.plane,
@@ -263,8 +265,6 @@ export class MaskEditor {
       this.begin(next)
     }
   }
-
-
 
   end(): void {
     const op = this.active
@@ -292,6 +292,21 @@ export class MaskEditor {
 
   redo(): void {
     this.enqueue({ op: null, run: () => this.api.redo() })
+  }
+
+  /**
+   * The label the pending log leaves at a level-0 voxel on frame `t`, replayed in order,
+   * or null when no operation touches it and the server's answer stands. A scoped erase
+   * over an unknown base stays null: only the server knows what was under it.
+   */
+  labelAt(t: number, voxel: PixelZYX): number | null {
+    let value: number | null = null
+    for (const op of this.ops) {
+      if (op.t !== t || !containsVoxel(op.voxels, voxel)) continue
+      if (op.mode === 'paint') value = op.label
+      else if (op.only === null || op.only === value) value = 0
+    }
+    return value
   }
 
   /** Drops the operations `version` made authoritative; the base being drawn holds them. */

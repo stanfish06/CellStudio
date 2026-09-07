@@ -449,3 +449,21 @@ export class FakeApi implements PixelApi, MaskApi, GraphApi {
     pending.resolve(value ?? this.pixelValue)
   }
 }
+
+/** `FakeApi` answers `cellsWindow` at once; tests of the track gate need the window held in flight. */
+export class HeldApi extends FakeApi {
+  signals: (AbortSignal | undefined)[] = []
+  private pendingWindows: ((rows: CellRow[]) => void)[] = []
+
+  cellsWindow(q: { t0: number; t1: number }, signal?: AbortSignal): Promise<CellRow[]> {
+    this.cellCalls.push({ t0: q.t0, t1: q.t1 })
+    this.signals.push(signal)
+    return new Promise<CellRow[]>((resolve) => this.pendingWindows.push(resolve))
+  }
+
+  settle(at = 0): void {
+    const resolve = this.pendingWindows[at]
+    if (!resolve) throw new Error(`no pending window at ${at}`)
+    resolve(this.cells)
+  }
+}

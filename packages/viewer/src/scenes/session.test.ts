@@ -5,7 +5,7 @@ import { GpuBudget } from '../data/gpuBudget'
 import type { NavSnapshot } from './types'
 import type { OrbitCamera } from '../state/nav'
 import type { LabelDefinition } from '@cellstudio/api-client'
-import { FakeApi, cell, devProject, navSnapshot } from '../test/data'
+import { FakeApi, HeldApi, cell, devProject, navSnapshot } from '../test/data'
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
 
@@ -116,6 +116,19 @@ describe('ViewerSession', () => {
     const held = s.status
     s.update(nav)
     expect(s.status).toBe(held)
+    s.dispose()
+  })
+
+  it('reopens the playback gate when the track window is the last fetch to land', async () => {
+    const api = new HeldApi()
+    api.cells = [cell(11, 3, [1, 100, 200], 7)]
+    const s = session(api)
+    s.update(navSnapshot(project, { activeView: '3d', t: 3 }))
+    await settle()
+    expect(s.status.awaitingFrame).toBe(true)
+    api.settle()
+    await settle()
+    expect(s.status.awaitingFrame).toBe(false)
     s.dispose()
   })
 
@@ -391,6 +404,39 @@ describe('ViewerSession label version path', () => {
     s.dispose()
   })
 
+  it("still lands the response's rows when the event for that version arrived first", async () => {
+    const api = new FakeApi()
+    const s = session(api)
+    s.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, t: 20 }))
+    await settle()
+    // the WS invalidate carries the version but no rows, and beats the HTTP result
+    expect(s.advanceLabels('session-1', 3)).toBe(true)
+    expect(s.advanceLabels('session-1', 3, [cell(77, 20, [1, 10, 20], 5)], [])).toBe(false)
+    expect(s.tracks.cell(77)?.trackId).toBe(5)
+    // the same order for a removal
+    s.advanceLabels('session-1', 4)
+    s.advanceLabels('session-1', 4, [], [77])
+    expect(s.tracks.cell(77)).toBe(null)
+    // an older result never overwrites a newer row
+    s.advanceLabels('session-1', 5, [cell(78, 20, [1, 10, 20], 6)], [])
+    s.advanceLabels('session-1', 4, [cell(78, 20, [1, 10, 20], 9)], [])
+    expect(s.tracks.cell(78)?.trackId).toBe(6)
+    s.dispose()
+  })
+
+  it("lands a graph result's rows when its event arrived first", async () => {
+    const api = new FakeApi()
+    const s = session(api)
+    s.update(navSnapshot(project, { activeView: 'xz', index: { xz: 512 }, t: 20 }))
+    await settle()
+    expect(s.advanceGraph('session-1', 2, { tracks: [5] })).toBe(true)
+    expect(
+      s.advanceGraph('session-1', 2, { cells: [cell(77, 20, [1, 10, 20], 5)], tracks: [5] }),
+    ).toBe(false)
+    expect(s.tracks.cell(77)?.trackId).toBe(5)
+    s.dispose()
+  })
+
   it('reserves a block of ids when a paint tool becomes active, and not before', async () => {
     const api = new FakeApi()
     const s = session(api)
@@ -563,7 +609,10 @@ describe('ViewerSession link flow.', () => {
 
   const linkSession = (
     api: FakeApi,
-    extra: { setLabelDefinitions?: (d: LabelDefinition[]) => void } = {},
+    extra: {
+      setLabelDefinitions?: (d: LabelDefinition[]) => void
+      select?: (cellId: number | null) => void
+    } = {},
   ) => {
     const errors: string[] = []
     const completed: string[] = []
@@ -585,17 +634,20 @@ describe('ViewerSession link flow.', () => {
     return { s, errors, completed }
   }
 
-  it('posts the link on an armed later-frame click and disarms on success', async () => {
+  it('posts the link on an armed later-frame click, disarms and selects the child', async () => {
     const api = new FakeApi()
     api.cells = [cell(77, 0, [1, 10, 20], 5), cell(88, 3, [1, 12, 22], 6)]
-    const { s, errors, completed } = linkSession(api)
+    const { s, errors, completed } = linkSession(api, {
+      select: (cellId) => completed.push(`select:${cellId}`),
+    })
     s.update(navSnapshot(project, { tool: 'link', pendingLink: armed, selection: { cellId: 77 } }))
     await settle()
 
     s.completePendingLink(88)
     await settle()
     expect(api.linkCalls).toEqual([{ parentId: 77, childId: 88 }])
-    expect(completed).toEqual(['complete'])
+    // the focus lands on the child so the next link arms from it
+    expect(completed).toEqual(['complete', 'select:88'])
     expect(errors).toEqual([])
     // the graph EditResult reached advanceGraph
     expect(s.tracks.graphVersion).toBe(2)

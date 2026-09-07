@@ -181,6 +181,7 @@ pub fn cors() -> CorsLayer {
             Method::HEAD,
             Method::POST,
             Method::PUT,
+            Method::DELETE,
             Method::OPTIONS,
         ])
         // the session header rides on every mutation, which makes it non-simple: without it

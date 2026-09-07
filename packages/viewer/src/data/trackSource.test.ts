@@ -1,29 +1,34 @@
-import type { CellRow } from '@cellstudio/api-client'
 import { describe, expect, it } from 'vitest'
 import { TrackSource } from './trackSource'
-import { FakeApi, cell } from '../test/data'
+import { FakeApi, HeldApi, cell } from '../test/data'
 
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
-/** `FakeApi` answers `cellsWindow` at once; these tests need the window held in flight. */
-class HeldApi extends FakeApi {
-  signals: (AbortSignal | undefined)[] = []
-  private pending: ((rows: CellRow[]) => void)[] = []
-
-  cellsWindow(q: { t0: number; t1: number }, signal?: AbortSignal): Promise<CellRow[]> {
-    this.cellCalls.push({ t0: q.t0, t1: q.t1 })
-    this.signals.push(signal)
-    return new Promise<CellRow[]>((resolve) => this.pending.push(resolve))
-  }
-
-  settle(at = 0): void {
-    const resolve = this.pending[at]
-    if (!resolve) throw new Error(`no pending window at ${at}`)
-    resolve(this.cells)
-  }
-}
-
 describe('TrackSource', () => {
+  it('reports a window in flight until it lands, and none once the loaded rows cover a step', async () => {
+    const api = new HeldApi()
+    const tracks = new TrackSource(api)
+    expect(tracks.pending).toBe(false)
+    tracks.ensure(20, 6)
+    expect(tracks.pending).toBe(true)
+    api.settle()
+    await flush()
+    expect(tracks.pending).toBe(false)
+    tracks.ensure(21, 6)
+    expect(tracks.pending).toBe(false)
+  })
+
+  it('clears the in-flight mark before notifying, so a listener reading status sees the window landed', async () => {
+    const api = new HeldApi()
+    const tracks = new TrackSource(api)
+    const seen: boolean[] = []
+    tracks.onChange(() => seen.push(tracks.pending))
+    tracks.ensure(20, 6)
+    api.settle()
+    await flush()
+    expect(seen).toEqual([false])
+  })
+
   it('reads once for repeated ensures of the window already in flight', async () => {
     const api = new HeldApi()
     const tracks = new TrackSource(api)

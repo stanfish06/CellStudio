@@ -246,6 +246,28 @@ describe('MaskEditor pending log', () => {
   })
 })
 
+describe('MaskEditor labelAt', () => {
+  it('answers from the pending log: paint wins, a scoped erase clears only its own label', () => {
+    const { editor } = setup()
+    stroke(editor, { label: 5, centre: [1, 32.5, 32.5], radius: 3 })
+    editor.end()
+    expect(editor.labelAt(0, [1, 32, 32])).toBe(5)
+    expect(editor.labelAt(0, [1, 32, 60])).toBeNull()
+    expect(editor.labelAt(1, [1, 32, 32])).toBeNull()
+    // an eraser protecting a neighbour leaves label 5 where it painted
+    stroke(editor, { tool: 'eraser', label: 9, centre: [1, 32.5, 32.5], radius: 3 })
+    editor.end()
+    expect(editor.labelAt(0, [1, 32, 32])).toBe(5)
+    // an eraser scoped to 5 clears it; over an untouched voxel the base is unknown
+    stroke(editor, { tool: 'eraser', label: 5, centre: [1, 32.5, 32.5], radius: 3 })
+    editor.end()
+    expect(editor.labelAt(0, [1, 32, 32])).toBe(0)
+    stroke(editor, { tool: 'eraser', label: 7, centre: [1, 50.5, 50.5], radius: 3 })
+    editor.end()
+    expect(editor.labelAt(0, [1, 50, 50])).toBeNull()
+  })
+})
+
 describe('MaskEditor orb strokes', () => {
   it('refuses a new-label stroke with no lease rather than echoing what the server rejects', () => {
     const { editor, errors } = setup()
