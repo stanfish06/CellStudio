@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Literal
 
 from cli_core.config import IOSection, StrictModel, ToolConfig
-from pydantic import Field
+from pydantic import Field, model_validator
 
 
 class UltrackInput(StrictModel):
@@ -42,6 +42,12 @@ class UltrackDataOptions(StrictModel):
     address: str | None = Field(
         None, description="postgresql address, required when database = postgresql"
     )
+
+    @model_validator(mode="after")
+    def _address_matches_backend(self):
+        if self.database == "postgresql" and not self.address:
+            raise ValueError("data.address is required when data.database = postgresql")
+        return self
 
 
 class UltrackSegmentationOptions(StrictModel):
@@ -126,6 +132,15 @@ class UltrackTrackingOptions(StrictModel):
     )
     power: float = Field(4, description="exponent of the power transform")
     bias: float = Field(-0.0, description="edge-weight bias (should be negative)")
+
+    @model_validator(mode="after")
+    def _windows_overlap(self):
+        if self.window_size is not None and self.overlap_size >= self.window_size:
+            raise ValueError(
+                f"tracking.overlap_size ({self.overlap_size}) must be smaller than "
+                f"tracking.window_size ({self.window_size})"
+            )
+        return self
 
 
 class UltrackOptions(StrictModel):
