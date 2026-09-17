@@ -70,7 +70,10 @@ def build_app(registry: Registry, description: str) -> typer.Typer:
         ] = False,
     ) -> None:
         """Run an algorithm as described by a config yaml."""
-        data = load_yaml(config)
+        try:
+            data = load_yaml(config)
+        except ValueError as e:
+            raise _fail(str(e)) from None
         algo_name = data.get("algorithm")
         if not algo_name:
             raise _fail(f"{config}: missing 'algorithm' key")
@@ -88,7 +91,12 @@ def build_app(registry: Registry, description: str) -> typer.Typer:
             f"[{registry.tool}] running {algorithm.name} ({algorithm.package} {algorithm.version()}) on {device}"
         )
         start = time.perf_counter()
-        result = run(cfg, RunContext(gpu=gpu))
+        # runners raise ValueError/FileNotFoundError for config and input problems;
+        # report those as a one-line error, let anything else keep its traceback
+        try:
+            result = run(cfg, RunContext(gpu=gpu))
+        except (ValueError, FileNotFoundError) as e:
+            raise _fail(f"{config}: {e}") from None
         elapsed = time.perf_counter() - start
         for key, value in (result or {}).items():
             typer.echo(f"{key}: {value}")
