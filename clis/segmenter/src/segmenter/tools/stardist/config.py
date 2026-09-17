@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Literal
 
 from cli_core.config import IOSection, StrictModel, ToolConfig
-from pydantic import Field
+from pydantic import Field, model_validator
 
 PretrainedModel = Literal[
     "2D_versatile_fluo", "2D_versatile_he", "2D_paper_dsb2018", "2D_demo", "3D_demo"
@@ -103,6 +103,12 @@ class StardistOptions(StrictModel):
     normalize: StardistNormalizeOptions = StardistNormalizeOptions()
     predict: StardistPredictOptions = StardistPredictOptions()
     big: StardistBigOptions = StardistBigOptions()
+
+    @model_validator(mode="after")
+    def _big_needs_axes(self):
+        if self.big.enabled and self.predict.axes is None:
+            raise ValueError("predict.axes is required when big.enabled is true")
+        return self
 
 
 class StardistConfig(ToolConfig):

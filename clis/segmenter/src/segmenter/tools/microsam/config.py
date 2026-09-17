@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Literal
 
 from cli_core.config import IOSection, StrictModel, ToolConfig
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 ModelType = Literal[
     "vit_t",
@@ -20,6 +20,10 @@ ModelType = Literal[
     "vit_h_histopathology",
     "vit_b_medical_imaging",
 ]
+
+
+# models shipping the instance-segmentation decoder that ais and apg need
+DECODER_SUFFIXES = ("_lm", "_em_organelles", "_histopathology")
 
 
 class MicrosamInput(StrictModel):
@@ -67,6 +71,24 @@ class MicrosamModelOptions(StrictModel):
         None, description="null = auto: ais when the model has a decoder, else amg"
     )
 
+    @field_validator("checkpoint")
+    @classmethod
+    def _checkpoint_exists(cls, v: Path | None) -> Path | None:
+        if v is not None and not v.exists():
+            raise ValueError(f"checkpoint {v} does not exist")
+        return v
+
+    @model_validator(mode="after")
+    def _mode_needs_decoder(self):
+        if self.segmentation_mode in ("ais", "apg") and not self.model_type.endswith(
+            DECODER_SUFFIXES
+        ):
+            raise ValueError(
+                f"segmentation_mode = {self.segmentation_mode} needs a model with a decoder "
+                f"(*{', *'.join(DECODER_SUFFIXES)}); {self.model_type} has none, use amg"
+            )
+        return self
+
 
 class MicrosamTilingOptions(StrictModel):
     enabled: bool = Field(
@@ -74,6 +96,14 @@ class MicrosamTilingOptions(StrictModel):
     )
     tile_shape: list[int] = Field([1024, 1024], description="tile shape in pixels")
     halo: list[int] = Field([256, 256], description="overlap added around each tile")
+
+    @model_validator(mode="after")
+    def _shapes_2d(self):
+        if self.enabled:
+            for name in ("tile_shape", "halo"):
+                if len(getattr(self, name)) != 2:
+                    raise ValueError(f"tiling.{name} must have 2 entries (y, x)")
+        return self
 
 
 class MicrosamRunOptions(StrictModel):

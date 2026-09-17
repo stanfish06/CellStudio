@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from cli_core.config import IOSection, StrictModel, ToolConfig
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class CellposeInput(StrictModel):
@@ -41,6 +41,15 @@ class CellposeModelOptions(StrictModel):
         description="explicit torch device (e.g. cuda:1), overrides the --gpu flag",
     )
     use_bfloat16: bool = Field(True, description="run model weights in bfloat16")
+
+    @field_validator("pretrained_model")
+    @classmethod
+    def _weights_exist(cls, v: str) -> str:
+        # a value with a path separator or file suffix is custom weights, not a builtin name
+        path = Path(v)
+        if (path.parent != Path(".") or path.suffix) and not path.exists():
+            raise ValueError(f"custom weights {v} do not exist")
+        return v
 
 
 class CellposeEvalOptions(StrictModel):
