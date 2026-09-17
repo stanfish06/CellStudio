@@ -2,9 +2,12 @@ from pathlib import Path
 from typing import Literal
 
 from cli_core.config import IOSection, StrictModel, ToolConfig
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 
 Coefs = tuple[float, float, float, float, float]
+# cutoffs are cost thresholds: squared px distance in centroid mode, [0,1] overlap
+# distance in overlap mode; these fill in for cutoffs the user did not set
+OVERLAP_CUTOFFS = {"cutoff": 0.9, "gap_closing_cutoff": 0.9}
 
 
 class LaptrackInput(StrictModel):
@@ -47,11 +50,12 @@ class LaptrackTrackingOptions(StrictModel):
     )
     cutoff: float = Field(
         225,
-        description="linking cost cutoff; sqeuclidean = squared max distance. overlap-mode distances are ~[0,1], use e.g. 0.9",
+        description="linking cost cutoff; centroid: squared max distance (default 225), overlap: distance in [0,1] (default 0.9)",
     )
     gap_closing_metric: str = Field("sqeuclidean", description="metric for gap closing")
     gap_closing_cutoff: float | Literal[False] = Field(
-        225, description="cost cutoff for gap closing, false = disable"
+        225,
+        description="cost cutoff for gap closing, false = disable (default 225 centroid, 0.9 overlap)",
     )
     gap_closing_max_frame_count: int = Field(
         2, description="max skipped frames for gap closing"
@@ -91,9 +95,20 @@ class LaptrackTrackingOptions(StrictModel):
     alternative_cost_percentile_interpolation: str = Field(
         "lower", description="see numpy.percentile interpolation"
     )
-    parallel_backend: Literal["serial", "ray"] = Field(
-        "serial", description="backend for cost computation"
+
+    @field_validator(
+        "cutoff",
+        "gap_closing_cutoff",
+        "splitting_cutoff",
+        "merging_cutoff",
+        mode="before",
     )
+    @classmethod
+    def _no_true_cutoff(cls, v):
+        # yaml `true` would coerce to 1.0 and run with a cutoff of 1
+        if v is True:
+            raise ValueError("use a number, or false to disable")
+        return v
 
 
 class LaptrackOverlapOptions(StrictModel):
@@ -120,6 +135,18 @@ class LaptrackOptions(StrictModel):
     )
     tracking: LaptrackTrackingOptions = LaptrackTrackingOptions()
     overlap: LaptrackOverlapOptions = LaptrackOverlapOptions()
+
+    @model_validator(mode="after")
+    def _mode_defaults(self):
+        if self.mode == "overlap":
+            missing = {
+                k: v
+                for k, v in OVERLAP_CUTOFFS.items()
+                if k not in self.tracking.model_fields_set
+            }
+            if missing:
+                self.tracking = self.tracking.model_copy(update=missing)
+        return self
 
 
 class LaptrackConfig(ToolConfig):
