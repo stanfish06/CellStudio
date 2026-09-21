@@ -2,7 +2,7 @@ from pathlib import Path
 from typing import Literal
 
 from cli_core.config import IOSection, StrictModel, ToolConfig
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 
 Coefs = tuple[float, float, float, float, float]
 # cutoffs are cost thresholds: squared px distance in centroid mode, [0,1] overlap
@@ -104,8 +104,10 @@ class LaptrackTrackingOptions(StrictModel):
         mode="before",
     )
     @classmethod
-    def _no_true_cutoff(cls, v):
-        # yaml `true` would coerce to 1.0 and run with a cutoff of 1
+    def _no_bool_cutoff(cls, v, info: ValidationInfo):
+        # yaml true/false would coerce to 1.0/0.0; only the optional stages accept false
+        if info.field_name == "cutoff" and isinstance(v, bool):
+            raise ValueError("use a number; linking cannot be disabled")
         if v is True:
             raise ValueError("use a number, or false to disable")
         return v
