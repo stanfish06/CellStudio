@@ -1,7 +1,23 @@
+from importlib.util import find_spec
+
 from cli_core.registry import RunContext
 
 from tracker.tools.ultrack.config import UltrackConfig
 from tracker.tools.ultrack.io import load_input, save_tracked_labels, save_tracks
+
+
+def _check_spatial_lengths(opts, ndim: int) -> None:
+    # per-axis lists must match the spatial dims of the labels, ultrack fails
+    # on the mismatch only after segmentation
+    for name, value in (
+        ("sigma", opts.sigma),
+        ("scale", opts.scale),
+        ("tracking.image_border_size", opts.tracking.image_border_size),
+    ):
+        if isinstance(value, list) and len(value) != ndim:
+            raise ValueError(
+                f"options.{name} has {len(value)} entries, labels have {ndim} spatial dims"
+            )
 
 
 def run(cfg: UltrackConfig, ctx: RunContext) -> dict:
@@ -26,7 +42,15 @@ def run(cfg: UltrackConfig, ctx: RunContext) -> dict:
                 f"but {db} does not exist; use overwrite = all for a fresh run"
             )
 
+    # the solver runs last; fail before segmentation and linking if it is missing
+    if opts.tracking.solver_name == "GUROBI" and find_spec("gurobipy") is None:
+        raise ValueError(
+            "options.tracking.solver_name = GUROBI but gurobipy is not installed; "
+            "use CBC or leave solver_name empty"
+        )
+
     labels = load_input(cfg)
+    _check_spatial_lengths(opts, labels.ndim - 1)
     opts.data.working_dir.mkdir(parents=True, exist_ok=True)
 
     tracking = opts.tracking.model_dump()
