@@ -10,8 +10,23 @@ def run(cfg: UltrackConfig, ctx: RunContext) -> dict:
     if ctx.gpu:
         print("ultrack's ILP solve is CPU-bound; running on CPU")
 
-    labels = load_input(cfg)
     opts = cfg.options
+    # overwrite != "all" reuses earlier stages from the database; on a fresh
+    # working dir those tables do not exist and ultrack fails mid-run
+    if opts.overwrite != "all":
+        db = opts.data.working_dir / "data.db"
+        if opts.data.database == "memory":
+            raise ValueError(
+                f"options.overwrite = {opts.overwrite!r} needs a persisted database; "
+                "database = memory starts empty every run, use overwrite = all"
+            )
+        if opts.data.database == "sqlite" and not db.exists():
+            raise ValueError(
+                f"options.overwrite = {opts.overwrite!r} reuses a previous run, "
+                f"but {db} does not exist; use overwrite = all for a fresh run"
+            )
+
+    labels = load_input(cfg)
     opts.data.working_dir.mkdir(parents=True, exist_ok=True)
 
     tracking = opts.tracking.model_dump()

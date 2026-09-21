@@ -137,7 +137,8 @@ class UltrackOptions(StrictModel):
         None, description="physical scale per spatial axis, used for distances"
     )
     overwrite: Literal["all", "links", "solutions", "none"] = Field(
-        "all", description="which database stages to recompute on re-run"
+        "all",
+        description="which database stages to recompute on re-run; anything but all needs an existing working_dir database",
     )
     data: UltrackDataOptions = UltrackDataOptions()
     segmentation: UltrackSegmentationOptions = UltrackSegmentationOptions()
