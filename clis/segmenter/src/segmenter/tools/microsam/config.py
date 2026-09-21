@@ -80,12 +80,15 @@ class MicrosamModelOptions(StrictModel):
 
     @model_validator(mode="after")
     def _mode_needs_decoder(self):
-        if self.segmentation_mode in ("ais", "apg") and not self.model_type.endswith(
-            DECODER_SUFFIXES
+        # a custom checkpoint carries its own decoder state, so only pretrained names are checked
+        if (
+            self.segmentation_mode in ("ais", "apg")
+            and self.checkpoint is None
+            and not self.model_type.endswith(DECODER_SUFFIXES)
         ):
             raise ValueError(
                 f"segmentation_mode = {self.segmentation_mode} needs a model with a decoder "
-                f"(*{', *'.join(DECODER_SUFFIXES)}); {self.model_type} has none, use amg"
+                f"(*{', *'.join(DECODER_SUFFIXES)}); pretrained {self.model_type} has none, use amg"
             )
         return self
 
