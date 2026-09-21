@@ -64,11 +64,14 @@ def run(cfg: StardistConfig, ctx: RunContext) -> dict:
         return normalize(img, opts.normalize.pmin, opts.normalize.pmax, axis=axis)
 
     def predict_one(img: np.ndarray) -> np.ndarray:
-        if opts.big.enabled:
-            if predict_kwargs["axes"] is None:
+        # per-axis tuples must cover every image axis (channel axis included)
+        for name in ("n_tiles", "scale"):
+            value = predict_kwargs[name]
+            if isinstance(value, tuple) and len(value) != img.ndim:
                 raise ValueError(
-                    "options.predict.axes is required when options.big.enabled is true"
+                    f"options.predict.{name} has {len(value)} entries, image has {img.ndim} axes"
                 )
+        if opts.big.enabled:
             labels, _details = model.predict_instances_big(
                 img,
                 block_size=opts.big.block_size,
